@@ -1,4 +1,7 @@
-use std::slice::Iter;
+use std::{slice::Iter, borrow::Cow};
+use crate::diagnostic::{ ResultScream, OptionScream };
+
+use regex::{Regex, Captures};
 
 #[derive(Clone, PartialEq)]
 pub struct AsciiStr {
@@ -62,24 +65,86 @@ impl IntoIterator for AsciiStr {
     }
 }
 
-pub enum CharDecodeError {
-    NotAscii,
-    InvalidLength(usize),
+#[derive(Debug, Clone, Copy)]
+pub enum UnescapeError {
+    UnmatchedBackslash(usize),
+    InvalidAscii(u8),
 }
 
-pub fn caret_decode(s: &str) -> Result<u8, CharDecodeError> {
-    if s.is_empty() {
-        return Err(CharDecodeError::InvalidLength(s.len()));
-    } else if s.len() == 1 && s.is_ascii() {
-        Ok(s.as_bytes()[0])
-    } else if s.len() == 2 && s.starts_with('^') {
-        let map = s.to_ascii_uppercase().as_bytes()[1];
-        if ('?'..'_').contains(&(map as char)) {
-            Ok(map ^ 0x40)
-        } else {
-            Err(CharDecodeError::NotAscii)
+pub fn unescape_str<'a>(s: &'a str) -> Result<Cow<'a, str>, UnescapeError> {
+    let mut failure = None;
+
+    let hex = Regex::new(r"\\x[0-9a-fA-F]{2}").unwrap();
+    let mut numbered = hex.replace_all(s, |cap: &Captures<'_>| {
+        // The RegEx expression guarantees a valid hex.
+        let byte = u8::from_str_radix(&cap[0].strip_prefix("\\x").unwrap(), 16).unwrap();
+
+        if byte > 0x7F {
+            failure = Some(byte);
         }
+
+        unsafe { String::from_utf8_unchecked(vec![byte]) }
+    });
+
+    if let Some(byte) = failure {
+        return Err(UnescapeError::InvalidAscii(byte));
+    }
+
+    let owned = numbered.to_owned();
+    numbered = {
+        let octal = Regex::new(r"\\[0-7]{3}").unwrap();
+        
+        octal.replace_all(&owned, |cap: &Captures<'_>| {
+            // The RegEx expression guarantees a valid octal.
+            let byte = u8::from_str_radix(&cap[0].strip_prefix('\\').unwrap(), 8).unwrap();
+
+            if byte > 0x7F {
+                failure = Some(byte);
+            }
+            
+            unsafe { String::from_utf8_unchecked(vec![byte]) }
+        })
+    };
+
+    if let Some(byte) = failure {
+        return Err(UnescapeError::InvalidAscii(byte));
+    }
+
+    let invalid = Regex::new(r"(\\[^nt0rabfv\\])|(\\\z)").unwrap();
+    if let Some(index) = invalid.find(&numbered) {
+        return Err(UnescapeError::UnmatchedBackslash(index.start()))
+    }
+
+    let simple = numbered.replace("\\n", "\n")
+        .replace("\\\\", "\\")
+        .replace("\\t", "\t")
+        .replace("\\'", "'")
+        .replace("\\\"", "\"")
+        .replace("\\0", "\0")
+        .replace("\\r", "\r")
+        .replace("\\a", "\x07")
+        .replace("\\b", "\x08")
+        .replace("\\f", "\x0C")
+        .replace("\\v", "\x0B");
+
+    if simple == s {
+        Ok(Cow::Borrowed(s))
     } else {
-        Err(CharDecodeError::InvalidLength(s.len()))
+        Ok(Cow::Owned(simple))
+    }
+}
+
+mod tests {
+    #[allow(unused_imports)]
+    use super::*;
+
+    #[test]
+    fn unescape() {
+        let test_str = "\\050 hello \\x29 \\t\\n\\0";
+        let unescaped = unescape_str(test_str).unwrap();
+        assert_eq!(unescaped, "\x28 hello \x29 \t\n\0");
+
+        let failure = "\\050 \\";
+        unescape_str(failure).unwrap_err();
     }
 }
