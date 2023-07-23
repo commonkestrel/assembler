@@ -1,7 +1,6 @@
-use std::{slice::Iter, borrow::Cow};
-use crate::diagnostic::{ ResultScream, OptionScream };
+use std::fmt;
 
-use regex::{Regex, Captures};
+use regex::{Captures, Regex};
 
 #[derive(Clone, PartialEq)]
 pub struct AsciiStr {
@@ -50,9 +49,31 @@ impl std::fmt::Debug for AsciiStr {
     }
 }
 
-impl AsciiStr {
-    fn iter(&self) -> Iter<u8> {
-        self.inner.iter()
+impl PartialEq<str> for AsciiStr {
+    fn eq(&self, other: &str) -> bool {
+        unsafe { std::str::from_utf8_unchecked(&self.inner) == other }
+    }
+}
+
+impl PartialEq<&str> for AsciiStr {
+    fn eq(&self, other: &&str) -> bool {
+        unsafe { std::str::from_utf8_unchecked(&self.inner) == *other }
+    }
+}
+
+impl fmt::Display for AsciiStr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", unsafe {
+            std::str::from_utf8_unchecked(&self.inner)
+        })
+    }
+}
+
+impl std::ops::Deref for AsciiStr {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
 
@@ -68,10 +89,10 @@ impl IntoIterator for AsciiStr {
 #[derive(Debug, Clone, Copy)]
 pub enum UnescapeError {
     UnmatchedBackslash(usize),
-    InvalidAscii(u8),
+    InvalidAscii(char),
 }
 
-pub fn unescape_str<'a>(s: &'a str) -> Result<Cow<'a, str>, UnescapeError> {
+pub fn unescape_str<'a>(s: &'a str) -> Result<AsciiStr, UnescapeError> {
     let mut failure = None;
 
     let hex = Regex::new(r"\\x[0-9a-fA-F]{2}").unwrap();
@@ -87,13 +108,13 @@ pub fn unescape_str<'a>(s: &'a str) -> Result<Cow<'a, str>, UnescapeError> {
     });
 
     if let Some(byte) = failure {
-        return Err(UnescapeError::InvalidAscii(byte));
+        return Err(UnescapeError::InvalidAscii(byte as char));
     }
 
     let owned = numbered.to_owned();
     numbered = {
         let octal = Regex::new(r"\\[0-7]{3}").unwrap();
-        
+
         octal.replace_all(&owned, |cap: &Captures<'_>| {
             // The RegEx expression guarantees a valid octal.
             let byte = u8::from_str_radix(&cap[0].strip_prefix('\\').unwrap(), 8).unwrap();
@@ -101,21 +122,22 @@ pub fn unescape_str<'a>(s: &'a str) -> Result<Cow<'a, str>, UnescapeError> {
             if byte > 0x7F {
                 failure = Some(byte);
             }
-            
+
             unsafe { String::from_utf8_unchecked(vec![byte]) }
         })
     };
 
     if let Some(byte) = failure {
-        return Err(UnescapeError::InvalidAscii(byte));
+        return Err(UnescapeError::InvalidAscii(byte as char));
     }
 
     let invalid = Regex::new(r"(\\[^nt0rabfv\\])|(\\\z)").unwrap();
     if let Some(index) = invalid.find(&numbered) {
-        return Err(UnescapeError::UnmatchedBackslash(index.start()))
+        return Err(UnescapeError::UnmatchedBackslash(index.start()));
     }
 
-    let simple = numbered.replace("\\n", "\n")
+    let simple = numbered
+        .replace("\\n", "\n")
         .replace("\\\\", "\\")
         .replace("\\t", "\t")
         .replace("\\'", "'")
@@ -127,11 +149,13 @@ pub fn unescape_str<'a>(s: &'a str) -> Result<Cow<'a, str>, UnescapeError> {
         .replace("\\f", "\x0C")
         .replace("\\v", "\x0B");
 
-    if simple == s {
-        Ok(Cow::Borrowed(s))
-    } else {
-        Ok(Cow::Owned(simple))
+    if let Some(byte) = simple.find(|c| c > '\x7F') {
+        return Err(UnescapeError::InvalidAscii(
+            simple.chars().nth(byte).unwrap(),
+        ));
     }
+
+    unsafe { Ok(AsciiStr::from_buffer_unchecked(simple.as_bytes())) }
 }
 
 mod tests {
@@ -142,7 +166,7 @@ mod tests {
     fn unescape() {
         let test_str = "\\050 hello \\x29 \\t\\n\\0";
         let unescaped = unescape_str(test_str).unwrap();
-        assert_eq!(unescaped, "\x28 hello \x29 \t\n\0");
+        assert!(unescaped == "\x28 hello \x29 \t\n\0");
 
         let failure = "\\050 \\";
         unescape_str(failure).unwrap_err();
