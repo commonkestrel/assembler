@@ -2,11 +2,11 @@ pub(crate) mod ascii;
 pub(crate) mod diagnostic;
 mod lexer;
 use diagnostic::Diagnostic;
-pub(crate) use diagnostic::{ResultScream, OptionScream};
+pub(crate) use diagnostic::{OptionScream, ResultScream};
 
-use std::sync::OnceLock;
 use clap::Parser;
-use clap_verbosity_flag::{ WarnLevel, Level };
+use clap_verbosity_flag::{Level, WarnLevel};
+use std::sync::OnceLock;
 
 #[derive(Parser, Debug)]
 #[command()]
@@ -20,18 +20,18 @@ pub static VERBOSITY: OnceLock<Verbosity> = OnceLock::new();
 fn main() {
     let args = Args::parse();
     let verbose = match args.verbose.log_level() {
-        Some(level) => {
-            match level {
-                Level::Error => Verbosity::Error,
-                Level::Warn => Verbosity::Warn,
-                Level::Info => Verbosity::Help,
-                Level::Debug | Level::Trace => Verbosity::Info,
-            }
+        Some(level) => match level {
+            Level::Error => Verbosity::Error,
+            Level::Warn => Verbosity::Warn,
+            Level::Info => Verbosity::Help,
+            Level::Debug | Level::Trace => Verbosity::Info,
         },
         None => Verbosity::Quiet,
     };
 
-    VERBOSITY.set(verbose).expect_or_scream("`VERBOSITY` should not be set");
+    VERBOSITY
+        .set(verbose)
+        .expect_or_scream("`VERBOSITY` should not be set");
     println!("{:?}", VERBOSITY.get());
 
     Diagnostic::error("hey something bad happened").emit();
