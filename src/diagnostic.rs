@@ -2,23 +2,30 @@ use crate::VERBOSITY;
 
 use super::lexer::Span;
 
-use std::{fmt, fs, io::{self, Write}};
-use colored::{Colorize, ColoredString};
+use colored::{ColoredString, Colorize};
+use std::{
+    fmt, fs,
+    io::{self, Write},
+};
 
-#[derive(Debug, Clone)]
-enum Location<'a, 'b> {
+#[derive(Debug, Clone, PartialEq)]
+enum Location {
     Span(Span),
-    Panic(&'a std::panic::Location<'b>),
+    Panic {
+        path: String,
+        line: u32,
+        column: u32,
+    },
 }
 
-#[derive(Debug, Clone)]
-pub struct Diagnostic<'a, 'b> {
+#[derive(Debug, Clone, PartialEq)]
+pub struct Diagnostic {
     /// Diagnostic priority level.
     level: Level,
     /// Diagnostic message.
     message: String,
     /// Target span.
-    location: Option<Location<'a, 'b>>,
+    location: Option<Location>,
     /// Child messages.
     children: Vec<Child>,
 }
@@ -52,21 +59,25 @@ macro_rules! diagnostic_levels {
         }
 
         #[doc = concat!("Creates a new diagnostic with the [`", stringify!($level), "`] level, and the given panic `location` and `message`.")]
-        pub fn $panicking<T>(location: &'a std::panic::Location<'b>, message: T) -> Self
+        pub fn $panicking<'a, T>(location: &'a std::panic::Location<'a>, message: T) -> Self
         where
             T: Into<String>
         {
             Diagnostic {
                 level: $level,
                 message: message.into(),
-                location: Some(Location::Panic(location)),
+                location: Some(Location::Panic {
+                    path: location.file().to_owned(),
+                    line: location.line(),
+                    column: location.column(),
+                }),
                 children: Vec::new(),
             }
         }
     };
 }
 
-impl<'a, 'b> Diagnostic<'a, 'b> {
+impl Diagnostic {
     pub fn new<T>(level: Level, message: T) -> Self
     where
         T: Into<String>,
@@ -91,14 +102,22 @@ impl<'a, 'b> Diagnostic<'a, 'b> {
         }
     }
 
-    pub fn panicking<T>(location: &'a std::panic::Location<'b>, level: Level, message: T) -> Self
+    pub fn panicking<'a, T>(
+        location: &'a std::panic::Location<'a>,
+        level: Level,
+        message: T,
+    ) -> Self
     where
-        T: Into<String>
+        T: Into<String>,
     {
         Diagnostic {
             level,
             message: message.into(),
-            location: Some(Location::Panic(location)),
+            location: Some(Location::Panic {
+                path: location.file().to_owned(),
+                line: location.line(),
+                column: location.column(),
+            }),
             children: Vec::new(),
         }
     }
@@ -141,14 +160,36 @@ impl<'a, 'b> Diagnostic<'a, 'b> {
                 Level::Error => format!("{}: {}", "error".red(), self.message).bold(),
                 Level::Warning => format!("{}: {}", "warning".yellow(), self.message).bold(),
                 Level::Note => format!("note: {}", self.message).bold(),
-                Level::Help => format!("{}: {}", "help".truecolor(150, 150, 255), self.message).bold(),
+                Level::Help => {
+                    format!("{}: {}", "help".truecolor(150, 150, 255), self.message).bold()
+                }
             }
         } else {
             match self.level {
-                Level::Error => format!("{}{} {}", "error".red().bold(), ":".bold(), italic_code(&self.message)).normal(),
-                Level::Warning => format!("{}{} {}", "warning".yellow().bold(), ":".bold(), italic_code(&self.message)).normal(),
-                Level::Note => format!("{} {}", "note:".bold(), italic_code(&self.message)).normal(),
-                Level::Help => format!("{}{} {}", "help".truecolor(150, 150, 255).bold(), ":".bold(), italic_code(&self.message)).normal(),
+                Level::Error => format!(
+                    "{}{} {}",
+                    "error".red().bold(),
+                    ":".bold(),
+                    italic_code(&self.message)
+                )
+                .normal(),
+                Level::Warning => format!(
+                    "{}{} {}",
+                    "warning".yellow().bold(),
+                    ":".bold(),
+                    italic_code(&self.message)
+                )
+                .normal(),
+                Level::Note => {
+                    format!("{} {}", "note:".bold(), italic_code(&self.message)).normal()
+                }
+                Level::Help => format!(
+                    "{}{} {}",
+                    "help".truecolor(150, 150, 255).bold(),
+                    ":".bold(),
+                    italic_code(&self.message)
+                )
+                .normal(),
             }
         }
     }
@@ -178,21 +219,25 @@ impl<'a, 'b> Diagnostic<'a, 'b> {
     }
 }
 
-impl<'a, 'b> fmt::Display for Diagnostic<'a, 'b> {
+impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(Location::Span(ref span)) = self.location {
-            let source = fs::read_to_string(span.source())
-                .expect("source file should be readable");
+            let source = fs::read_to_string(span.source()).expect("source file should be readable");
 
-            let indicies = indicies_from_indicies(&source, span.start(), span.end()).expect("span should be fully contained within the source file");
+            let indicies = indicies_from_indicies(&source, span.start(), span.end())
+                .expect_or_scream("`Span` should be fully contained within the source file");
             let multi_line = (indicies.last_line - indicies.first_line) > 0;
 
             // Length of the number when converted to decimal, plus one for padding.
             let spaces = (indicies.last_line.checked_ilog10().unwrap_or(0) + 1) as usize;
 
             let description = if multi_line {
-                let first = source.lines().nth(indicies.first_line).expect_or_scream("`Span` should be contained in the source file");
-                format!("{cap:>width$}\
+                let first = source
+                    .lines()
+                    .nth(indicies.first_line)
+                    .expect_or_scream("`Span` should be contained in the source file");
+                format!(
+                    "{cap:>width$}\
                         {first:<spaces$}
                         {cap:>width$}
                     ",
@@ -200,9 +245,13 @@ impl<'a, 'b> fmt::Display for Diagnostic<'a, 'b> {
                     spaces = spaces.max(4),
                     width = (spaces + 1).max(5)
                 )
-            }else {
-                let line = source.lines().nth(indicies.first_line).expect_or_scream("`Span` should be contained in the source file");
-                format!("{cap:>width$}\
+            } else {
+                let line = source
+                    .lines()
+                    .nth(indicies.first_line + 1)
+                    .expect_or_scream("`Span` should be contained in the source file");
+                format!(
+                    "{cap:>width$}\
                         {n:<spaces$}| {line}\
                         {cap:>width$}
                     ",
@@ -215,8 +264,10 @@ impl<'a, 'b> fmt::Display for Diagnostic<'a, 'b> {
             let children = self.children.iter().fold(String::new(), |fold, child| {
                 fold + &format!("{:>width$} {}", "=", child, width = spaces + 1)
             });
- 
-            write!(f, "{}\n\t--> {}:{}:{}\n{}\n{}", 
+
+            write!(
+                f,
+                "{}\n   --> {}:{}:{}\n{}\n{}",
                 self.format_message(true),
                 span.source().display(),
                 indicies.first_line,
@@ -224,15 +275,27 @@ impl<'a, 'b> fmt::Display for Diagnostic<'a, 'b> {
                 description,
                 children,
             )
-        } else if let Some(Location::Panic(location)) = self.location {
-            write!(f, "{}, {}:{}:{}", self.format_message(false), location.file(), location.line(), location.column())
+        } else if let Some(Location::Panic {
+            ref path,
+            line,
+            column,
+        }) = self.location
+        {
+            write!(
+                f,
+                "{}, {}:{}:{}",
+                self.format_message(false),
+                path,
+                line,
+                column
+            )
         } else {
             write!(f, "{}", self.format_message(false))
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Level {
     /// An error.
     Error = 1,
@@ -256,7 +319,15 @@ impl PartialOrd<crate::Verbosity> for Level {
     }
 }
 
-#[derive(Debug, Clone)]
+impl Default for Diagnostic {
+    fn default() -> Self {
+        // We use error here since the only place
+        // this method is called is in `logos::Logos::error`
+        Diagnostic::error("default error message")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 struct Child {
     level: Level,
     message: String,
@@ -340,28 +411,40 @@ fn italic_code(message: &str) -> String {
 impl fmt::Display for Child {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.level {
-            Level::Error => write!(f, "{}", format!("{}: {}", "error".red(), self.message).bold()),
-            Level::Warning => write!(f, "{}", format!("{}: {}", "warning".yellow(), self.message).bold()),
+            Level::Error => write!(
+                f,
+                "{}",
+                format!("{}: {}", "error".red(), self.message).bold()
+            ),
+            Level::Warning => write!(
+                f,
+                "{}",
+                format!("{}: {}", "warning".yellow(), self.message).bold()
+            ),
             Level::Note => write!(f, "{}", format!("note: {}", self.message).bold()),
-            Level::Help => write!(f, "{}", format!("{}: {}", "help".truecolor(150, 150, 255), self.message).bold()),
+            Level::Help => write!(
+                f,
+                "{}",
+                format!("{}: {}", "help".truecolor(150, 150, 255), self.message).bold()
+            ),
         }
     }
 }
 
 pub trait ResultScream<T, E> {
     /// Returns the contained [`Ok`] value, consuming the `self` value.
-    /// 
-    /// 
-    fn unwrap_or_scream(self) -> T 
-    where 
+    ///
+    ///
+    fn unwrap_or_scream(self) -> T
+    where
         E: fmt::Debug;
 
     /// Returns the contained [`Ok`] value, consuming the `self` value.
-    /// 
+    ///
     /// ### Panics
-    /// 
+    ///
     /// Panics if the value is an [`Err`], with a diagnostic message including
-    /// the passed message and the content of the [`Err`] being 
+    /// the passed message and the content of the [`Err`] being
     /// [`scream`][Diagnostic::scream]ed at an [`Error`][Level::Error] level.
     fn expect_or_scream<M: Into<String>>(self, message: M) -> T
     where
@@ -382,7 +465,7 @@ macro_rules! scream {
     };
     ($message:expr) => {
         $crate::diagnostic::Diagnostic::error($message).scream();
-    }
+    };
 }
 
 impl<T, E> ResultScream<T, E> for Result<T, E> {
@@ -390,11 +473,14 @@ impl<T, E> ResultScream<T, E> for Result<T, E> {
     #[inline(always)]
     fn unwrap_or_scream(self) -> T
     where
-        E: fmt::Debug
+        E: fmt::Debug,
     {
         match self {
             Ok(ok) => ok,
-            Err(err) => scream_with("called `Result::unwrap_or_scream()` on an `Err` value", &err),
+            Err(err) => scream_with(
+                "called `Result::unwrap_or_scream()` on an `Err` value",
+                &err,
+            ),
         }
     }
 
@@ -402,7 +488,7 @@ impl<T, E> ResultScream<T, E> for Result<T, E> {
     #[inline(always)]
     fn expect_or_scream<M: Into<String>>(self, message: M) -> T
     where
-        E: fmt::Debug
+        E: fmt::Debug,
     {
         match self {
             Ok(ok) => ok,
@@ -414,10 +500,13 @@ impl<T, E> ResultScream<T, E> for Result<T, E> {
     #[inline(always)]
     fn unwrap_err_or_scream(self) -> E
     where
-        T: fmt::Debug 
+        T: fmt::Debug,
     {
         match self {
-            Ok(ok) => scream_with("called `Result::unwrap_err_or_scream` on an `Ok` value", &ok),
+            Ok(ok) => scream_with(
+                "called `Result::unwrap_err_or_scream` on an `Ok` value",
+                &ok,
+            ),
             Err(err) => err,
         }
     }
@@ -426,7 +515,7 @@ impl<T, E> ResultScream<T, E> for Result<T, E> {
     #[inline(always)]
     fn expect_err_or_scream<M: Into<String>>(self, message: M) -> E
     where
-        T: fmt::Debug 
+        T: fmt::Debug,
     {
         match self {
             Ok(ok) => scream_with(message.into().as_ref(), &ok),
@@ -445,7 +534,7 @@ pub trait OptionScream<T> {
         T: fmt::Debug;
 
     fn expect_none_or_scream<M: Into<String>>(self, message: M)
-    where 
+    where
         T: fmt::Debug;
 }
 
@@ -471,25 +560,28 @@ impl<T> OptionScream<T> for Option<T> {
     #[track_caller]
     #[inline(always)]
     fn unwrap_none_or_scream(self)
-    where 
-        T: fmt::Debug
+    where
+        T: fmt::Debug,
     {
         match self {
-            Some(some) => scream_with("called `Option::unwrap_none_or_scream` on `Some` value", &some),
-            None => {},
+            Some(some) => scream_with(
+                "called `Option::unwrap_none_or_scream` on `Some` value",
+                &some,
+            ),
+            None => {}
         }
     }
 
     #[track_caller]
     #[inline(always)]
     fn expect_none_or_scream<M: Into<String>>(self, message: M)
-    where 
-        T: fmt::Debug 
+    where
+        T: fmt::Debug,
     {
         match self {
             Some(some) => scream_with(message.into().as_ref(), &some),
-            None => {},
-        }    
+            None => {}
+        }
     }
 }
 
@@ -498,7 +590,7 @@ impl<T> OptionScream<T> for Option<T> {
 #[inline(never)]
 fn scream(msg: &str) -> ! {
     let location = std::panic::Location::caller();
-    
+
     if cfg!(debug_assertions) {
         Diagnostic::panicking_error(location, msg).scream()
     } else {
