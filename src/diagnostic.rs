@@ -1,6 +1,6 @@
 use crate::VERBOSITY;
 
-use super::lexer::Span;
+use super::lex::Span;
 
 use colored::{ColoredString, Colorize};
 use std::{
@@ -201,10 +201,9 @@ impl Diagnostic {
     }
 
     pub fn force_emit(self) {
-        if matches!(self.level, Level::Error) {
-            let _ = writeln!(io::stderr(), "{}", self);
-        } else {
-            let _ = writeln!(io::stdout(), "{}", self);
+        match self.level {
+            Level::Error | Level::Warning => eprintln!("{}", self),
+            _ => println!("{}", self),
         }
     }
 
@@ -439,6 +438,10 @@ pub trait ResultScream<T, E> {
     where
         E: fmt::Debug;
 
+    fn spanned_unwrap(self, span: Span) -> T
+    where
+        E: fmt::Debug;
+    
     /// Returns the contained [`Ok`] value, consuming the `self` value.
     ///
     /// ### Panics
@@ -449,6 +452,11 @@ pub trait ResultScream<T, E> {
     fn expect_or_scream<M: Into<String>>(self, message: M) -> T
     where
         E: fmt::Debug;
+    
+    fn spanned_expect<M: Into<String>>(self, span: Span, message: M) -> T
+    where
+        E: fmt::Debug;
+        
     fn unwrap_err_or_scream(self) -> E
     where
         T: fmt::Debug;
@@ -478,7 +486,23 @@ impl<T, E> ResultScream<T, E> for Result<T, E> {
         match self {
             Ok(ok) => ok,
             Err(err) => scream_with(
-                "called `Result::unwrap_or_scream()` on an `Err` value",
+                "called `Result::unwrap_or_scream` on an `Err` value",
+                &err,
+            ),
+        }
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    fn spanned_unwrap(self, span: Span) -> T
+    where
+        E: fmt::Debug
+    {
+        match self {
+            Ok(ok) => ok,
+            Err(err) => scream_with_span(
+                span,
+                "called `Result::spanned_unwrap` on an `Err` value",
                 &err,
             ),
         }
@@ -493,6 +517,18 @@ impl<T, E> ResultScream<T, E> for Result<T, E> {
         match self {
             Ok(ok) => ok,
             Err(err) => scream_with(message.into().as_ref(), &err),
+        }
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    fn spanned_expect<M: Into<String>>(self, span: Span, message: M) -> T
+    where
+        E: fmt::Debug
+    {
+        match self {
+            Ok(ok) => ok,
+            Err(err) => scream_with_span(span, message.into().as_ref(), &err)
         }
     }
 
@@ -524,10 +560,14 @@ impl<T, E> ResultScream<T, E> for Result<T, E> {
     }
 }
 
-pub trait OptionScream<T> {
+pub trait OptionalScream<T> {
     fn unwrap_or_scream(self) -> T;
 
+    fn spanned_unwrap(self, span: Span) -> T;
+
     fn expect_or_scream<M: Into<String>>(self, message: M) -> T;
+
+    fn spanned_expect<M: Into<String>>(self, span: Span, message: M) -> T;
 
     fn unwrap_none_or_scream(self)
     where
@@ -538,7 +578,7 @@ pub trait OptionScream<T> {
         T: fmt::Debug;
 }
 
-impl<T> OptionScream<T> for Option<T> {
+impl<T> OptionalScream<T> for Option<T> {
     #[track_caller]
     #[inline(always)]
     fn unwrap_or_scream(self) -> T {
@@ -550,10 +590,28 @@ impl<T> OptionScream<T> for Option<T> {
 
     #[track_caller]
     #[inline(always)]
+    fn spanned_unwrap(self, span: Span) -> T {
+        match self {
+            Some(some) => some,
+            None => spanned_scream(span, "called `Option::spanned_unwrap` on a `None` value")
+        }
+    }
+
+    #[track_caller]
+    #[inline(always)]
     fn expect_or_scream<M: Into<String>>(self, message: M) -> T {
         match self {
             Some(some) => some,
             None => scream(message.into().as_ref()),
+        }
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    fn spanned_expect<M: Into<String>>(self, span: Span, message: M) -> T {
+        match self {
+            Some(some) => some,
+            None => spanned_scream(span, message.into().as_ref())
         }
     }
 
@@ -601,6 +659,13 @@ fn scream(msg: &str) -> ! {
 #[cold]
 #[track_caller]
 #[inline(never)]
+fn spanned_scream(span: Span, msg: &str) -> ! {
+    Diagnostic::spanned_error(span, msg).scream()
+}
+
+#[cold]
+#[track_caller]
+#[inline(never)]
 fn scream_with(msg: &str, value: &dyn fmt::Debug) -> ! {
     let location = std::panic::Location::caller();
 
@@ -609,4 +674,11 @@ fn scream_with(msg: &str, value: &dyn fmt::Debug) -> ! {
     } else {
         Diagnostic::error(format!("{msg}: {value:?}")).scream()
     }
+}
+
+#[cold]
+#[track_caller]
+#[inline(never)]
+fn scream_with_span(span: Span, msg: &str, value: &dyn fmt::Debug) -> ! {
+    Diagnostic::spanned_error(span, format!("{msg}: {value:?}")).scream()
 }
