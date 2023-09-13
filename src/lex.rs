@@ -1,19 +1,19 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind};
-use std::marker::PhantomData;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::str::FromStr;
 
+use crate::Errors;
 use crate::ascii::{unescape_str, AsciiStr, UnescapeError};
-use crate::diagnostic::{Diagnostic, OptionScream, ResultScream};
+use crate::diagnostic::{Diagnostic, OptionalScream, ResultScream};
 use logos::{Lexer, Logos};
 
 pub type TokenStream = Vec<Token>;
 pub type LexResult = std::result::Result<TokenStream, Errors>;
-pub type Errors = Vec<Diagnostic>;
 
+#[derive(Debug, PartialEq, Clone)]
 pub struct Token {
     pub inner: TokenInner,
     pub span: Span,
@@ -92,11 +92,12 @@ pub fn lex<'a, P: AsRef<Path>>(path: P) -> LexResult {
 
 #[derive(Logos, Clone, Debug, PartialEq)]
 #[logos(error = Diagnostic)]
+#[logos(skip r"[(//);][^\n]*")]
 pub enum TokenInner {
-    #[regex(r"[1-9][_0-9]*", TokenInner::decimal)]
-    #[regex(r"0b[01][_01]+", TokenInner::binary)]
-    #[regex(r"0x[0-9a-fA-F][_0-9a-fA-F]*", TokenInner::hexadecimal)]
+    #[regex(r"0b[01][_01]*", TokenInner::binary)]
     #[regex(r"0o[0-7][_0-7]*", TokenInner::octal)]
+    #[regex(r"[1-9][_0-9]*", TokenInner::decimal)]
+    #[regex(r"0x[0-9a-fA-F][_0-9a-fA-F]*", TokenInner::hexadecimal)]
     Immediate(u64),
 
     #[regex(r#""((\\")|[\x00-\x21\x23-\x7F])*""#, TokenInner::string)]
@@ -107,8 +108,7 @@ pub enum TokenInner {
     #[regex(r#"<"[^"]*">"#, TokenInner::path_string)]
     Path(PathBuf),
 
-    #[regex(r"'[\x00-\x7F]'", TokenInner::char)]
-    #[regex(r"'\\[\x00-\x7F]{1,3}'", TokenInner::escape)]
+    #[regex(r"'[\x00-\x7F]*'", TokenInner::char)]
     Char(u8),
 
     #[regex(r"\n")]
@@ -119,11 +119,14 @@ pub enum TokenInner {
     #[regex(r"\[[0-9][_0-9]*\]", TokenInner::addr_dec)]
     #[regex(r"\[0x[0-9a-fA-F][_0-9a-fA-F]*\]", TokenInner::addr_hex)]
     Address(u16),
-    
+
     #[regex(r"[_a-zA-Z][_a-zA-Z0-9]", Ident::any)]
     #[regex(r"%[_a-zA-Z][_a-zA-Z0-9]", Ident::macro_variable)]
     #[regex(r"\$[_a-zA-Z][_a-zA-Z0-9]", Ident::variable)]
     Ident(Ident),
+
+    #[regex(r"///[^\n]*", TokenInner::doc)]
+    Doc(String),
 }
 
 impl TokenInner {
@@ -184,29 +187,17 @@ impl TokenInner {
     }
 
     fn char(lex: &mut Lexer<TokenInner>) -> Result<u8, Diagnostic> {
-        let slice = lex
-            .slice()
-            .strip_prefix('\'')
-            .ok_or(Diagnostic::error("string not prefixed with `'`"))?
-            .strip_suffix('\'')
-            .ok_or(Diagnostic::error("string not suffixed with `'`"))?;
-
-        slice
-            .as_bytes()
-            .get(0)
-            .copied()
-            .ok_or(Diagnostic::error("no inner byte found in char"))
+        let slice = lex.slice();
+        Self::char_from_str(slice)
     }
 
-    fn escape(lex: &mut Lexer<TokenInner>) -> Result<u8, Diagnostic> {
-        let slice = lex
-            .slice()
-            .strip_prefix('\'')
+    fn char_from_str(s: &str) -> Result<u8, Diagnostic> {
+        let inner = s.strip_prefix('\'')
             .ok_or(Diagnostic::error("char not prefixed with `'`"))?
             .strip_suffix('\'')
             .ok_or(Diagnostic::error("char not suffixed with `'`"))?;
 
-        let escaped = unescape_str(slice).map_err(|err| {
+        let escaped = unescape_str(s).map_err(|err| {
             Diagnostic::error(match err {
                 UnescapeError::InvalidAscii(byte) => format!("invalid ASCII character: {byte}"),
                 UnescapeError::UnmatchedBackslash(index) => {
@@ -257,6 +248,7 @@ impl TokenInner {
             Diagnostic::error(format!("address must be a valid 16-bit integer: {err}"))
         })
     }
+
     fn addr_dec(lex: &mut Lexer<TokenInner>) -> Result<u16, Diagnostic> {
         let slice = lex
             .slice()
@@ -269,6 +261,7 @@ impl TokenInner {
             Diagnostic::error(format!("address must be a valid 16-bit integer: {err}"))
         })
     }
+
     fn addr_hex(lex: &mut Lexer<TokenInner>) -> Result<u16, Diagnostic> {
         let slice = lex
             .slice()
@@ -282,6 +275,15 @@ impl TokenInner {
         u16::from_str_radix(slice, 16).map_err(|err| {
             Diagnostic::error(format!("address must be a valid 16-bit integer: {err}"))
         })
+    }
+
+    fn doc(lex: &mut Lexer<TokenInner>) -> Result<String, Diagnostic> {
+        Ok(lex
+            .slice()
+            .strip_prefix("///")
+            .ok_or(Diagnostic::error("doc comment does not start with `///`"))?
+            .trim()
+            .to_owned())
     }
 }
 
@@ -297,12 +299,18 @@ pub enum Ident {
 
 impl Ident {
     fn variable(lex: &mut Lexer<TokenInner>) -> Result<Ident, Diagnostic> {
-        let slice = lex.slice().strip_prefix("$").ok_or(Diagnostic::error("variable not prefixed by `$`"))?;
+        let slice = lex
+            .slice()
+            .strip_prefix("$")
+            .ok_or(Diagnostic::error("variable not prefixed by `$`"))?;
         Ok(Ident::Variable(slice.to_owned()))
     }
 
     fn macro_variable(lex: &mut Lexer<TokenInner>) -> Result<Ident, Diagnostic> {
-        let slice = lex.slice().strip_prefix("%").ok_or(Diagnostic::error("macro variable not prefixed by `%`"))?;
+        let slice = lex
+            .slice()
+            .strip_prefix("%")
+            .ok_or(Diagnostic::error("macro variable not prefixed by `%`"))?;
         Ok(Ident::MacroVariable(slice.to_owned()))
     }
 
@@ -329,12 +337,12 @@ pub enum Register {
     B,
     /// GP register C.
     C,
-    /// Data direction register.
-    DD,
-    /// GP register Z
+    /// GP register D.
+    D,
+    /// GP register Z (disposable).
     Z,
     /// Status register
-    SREG,
+    S,
     /// Memory index low.
     L,
     /// Memory index high.
@@ -345,15 +353,15 @@ impl FromStr for Register {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "a" => Ok(Register::A),
-            "b" => Ok(Register::B),
-            "c" => Ok(Register::C),
-            "dd" => Ok(Register::DD),
-            "z" => Ok(Register::Z),
-            "s" | "sreg" => Ok(Register::SREG),
-            "l" => Ok(Register::L),
-            "h" => Ok(Register::H),
+        match s.to_uppercase().as_str() {
+            "A" => Ok(Register::A),
+            "B" => Ok(Register::B),
+            "C" => Ok(Register::C),
+            "D" => Ok(Register::D),
+            "Z" => Ok(Register::Z),
+            "S" | "SREG" => Ok(Register::S),
+            "L" => Ok(Register::L),
+            "H" => Ok(Register::H),
             _ => Err(()),
         }
     }
@@ -361,9 +369,12 @@ impl FromStr for Register {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Keyword {
-    Define,
-    Include,
-    Paste,
+    Imm,
+    Imm16,
+    Imm32,
+    Imm64,
+    Macro,
+
 }
 
 impl FromStr for Keyword {
@@ -371,22 +382,20 @@ impl FromStr for Keyword {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            _ => Err(())
+            _ => Err(()),
         }
     }
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum Instruction {
-
-}
+pub enum Instruction {}
 
 impl FromStr for Instruction {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            _ => Err(())
+            _ => Err(()),
         }
     }
 }
@@ -422,13 +431,13 @@ mod tests {
     #[test]
     fn numbers() {
         println!("{}", std::env::current_dir().unwrap().display());
-        let lexed = match lex("./examples/numbers.asm") {
+        let lexed = match lex("./examples/lex.asm") {
             Ok(tokens) => tokens,
             Err(errors) => {
                 for error in errors {
                     error.force_emit();
                 }
-                Diagnostic::error("failed due to previous errors").scream();
+                Diagnostic::error("lexing failed due to previous errors").scream();
             }
         };
 
