@@ -1,12 +1,15 @@
 pub(crate) mod ascii;
 pub(crate) mod diagnostic;
-mod lexer;
+mod lex;
+mod parse;
 use diagnostic::Diagnostic;
-pub(crate) use diagnostic::{OptionScream, ResultScream};
+pub(crate) use diagnostic::{OptionalScream, ResultScream};
 
 use clap::Parser;
 use clap_verbosity_flag::{Level, WarnLevel};
 use std::sync::OnceLock;
+
+pub type Errors = Vec<Diagnostic>;
 
 #[derive(Parser, Debug)]
 #[command()]
