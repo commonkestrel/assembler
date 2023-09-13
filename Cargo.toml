@@ -1,5 +1,6 @@
 [package]
 name = "assembler"
+authors = ["Kestrel"]
 version = "0.1.0"
 edition = "2021"
 
@@ -11,3 +12,4 @@ clap-verbosity-flag = "2.0.1"
 colored = "2.0.4"
 logos = "0.13.0"
 regex = "1.9.1"
+markdown = "1.0.0-alpha.11"
