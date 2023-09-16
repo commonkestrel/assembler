@@ -19,7 +19,7 @@ pub struct Token {
     pub span: Span,
 }
 
-pub fn lex<'a, P: AsRef<Path>>(path: P) -> LexResult {
+pub fn lex<P: AsRef<Path>>(path: P) -> LexResult {
     let mut tokens: TokenStream = Vec::new();
     let mut errs: Errors = Vec::new();
     let source = Rc::new(path.as_ref().to_path_buf());
