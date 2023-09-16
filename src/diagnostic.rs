@@ -223,17 +223,17 @@ impl fmt::Display for Diagnostic {
         if let Some(Location::Span(ref span)) = self.location {
             let source = fs::read_to_string(span.source()).expect("source file should be readable");
 
-            let indicies = indicies_from_indicies(&source, span.start(), span.end())
+            let indices = indicies_from_indicies(&source, span.start(), span.end())
                 .expect_or_scream("`Span` should be fully contained within the source file");
-            let multi_line = (indicies.last_line - indicies.first_line) > 0;
+            let multi_line = (indices.last_line - indices.first_line) > 0;
 
             // Length of the number when converted to decimal, plus one for padding.
-            let spaces = (indicies.last_line.checked_ilog10().unwrap_or(0) + 1) as usize;
+            let spaces = (indices.last_line.checked_ilog10().unwrap_or(0) + 1) as usize;
 
             let description = if multi_line {
                 let first = source
                     .lines()
-                    .nth(indicies.first_line)
+                    .nth(indices.first_line)
                     .expect_or_scream("`Span` should be contained in the source file");
                 format!(
                     "{cap:>width$}\
@@ -247,14 +247,14 @@ impl fmt::Display for Diagnostic {
             } else {
                 let line = source
                     .lines()
-                    .nth(indicies.first_line + 1)
+                    .nth(indices.first_line + 1)
                     .expect_or_scream("`Span` should be contained in the source file");
                 format!(
                     "{cap:>width$}\
                         {n:<spaces$}| {line}\
                         {cap:>width$}
                     ",
-                    n = indicies.first_line,
+                    n = indices.first_line,
                     cap = "|",
                     width = spaces + 1,
                 )
@@ -269,8 +269,8 @@ impl fmt::Display for Diagnostic {
                 "{}\n   --> {}:{}:{}\n{}\n{}",
                 self.format_message(true),
                 span.source().display(),
-                indicies.first_line,
-                indicies.first_char,
+                indices.first_line,
+                indices.first_char,
                 description,
                 children,
             )
