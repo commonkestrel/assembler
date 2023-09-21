@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::Errors;
-use crate::lex::{ self, TokenStream, TokenInner, Token, Span, Ident, Register };
+use crate::lex::{ self, TokenStream, TokenInner, Token, Span, Ident, Register, Ty };
 use crate::diagnostic::{Diagnostic, OptionalScream};
 
 pub fn parse(stream: TokenStream) -> Result<(Errors), Errors> {
@@ -78,18 +78,8 @@ pub struct Variable {
     
 }
 
-enum Type {
-    Reg,
-    Addr,
-    Label,
-    Imm8,
-    Imm16,
-    Imm32,
-    Imm64,
-}
-
 pub struct Parameter {
-    types: Vec<Type>,
+    types: Vec<Ty>,
     name: String,
 }
 
@@ -97,9 +87,9 @@ impl Parameter {
     fn fits(&self, token: &TokenInner) -> bool {
         for ty in self.types.iter() {
             if 
-                (matches!(ty, Type::Addr) && matches!(token, TokenInner::Address(_))) | 
-                (matches!(ty, Type::Label) && matches!(token, TokenInner::Ident(Ident::Ident(_)))) | 
-                (matches!(ty, Type::Reg) && matches!(token, TokenInner::Ident(Ident::Register(_)))) {
+                (matches!(ty, Ty::Addr) && matches!(token, TokenInner::Address(_))) | 
+                (matches!(ty, Ty::Label) && matches!(token, TokenInner::Ident(Ident::Ident(_)))) | 
+                (matches!(ty, Ty::Reg) && matches!(token, TokenInner::Ident(Ident::Register(_)))) {
                 return true;
             }
         }

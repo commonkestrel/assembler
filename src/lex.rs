@@ -1,5 +1,6 @@
-use std::fs::File;
-use std::io::{BufRead, BufReader, ErrorKind};
+use std::fmt;
+use std::fs::{File, self};
+use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -38,14 +39,14 @@ pub fn lex<P: AsRef<Path>>(path: P) -> LexResult {
                                     span: Span {
                                         line: line_num,
                                         range: spanned,
-                                        source: source.clone(),
+                                        source: Source::File(source.clone()),
                                     },
                                 }),
                                 Err(mut err) => {
                                     err.set_span(Span {
                                         line: line_num,
                                         range: spanned,
-                                        source: source.clone(),
+                                        source: Source::File(source.clone()),
                                     });
                                     errs.push(err);
                                 }
@@ -59,7 +60,7 @@ pub fn lex<P: AsRef<Path>>(path: P) -> LexResult {
                             span: Span {
                                 line: line_num,
                                 range: character - 1..character,
-                                source: source.clone(),
+                                source: Source::File(source.clone()),
                             },
                         })
                     }
@@ -81,6 +82,50 @@ pub fn lex<P: AsRef<Path>>(path: P) -> LexResult {
                 err.kind()
             ),
         })),
+    }
+
+    if errs.is_empty() {
+        Ok(tokens)
+    } else {
+        Err(errs)
+    }
+}
+
+fn lex_string<S>(file: S) -> LexResult
+where
+    S: Into<String>,
+{
+    let mut tokens: TokenStream = Vec::new();
+    let mut errs: Errors = Vec::new();
+    let mut character = 0;
+    let source = Rc::new(file.into());
+
+    for (line_num, line) in source.lines().enumerate() {
+        for (token, span) in TokenInner::lexer(&line).spanned() {
+            let spanned = (span.start + character)..(span.end + character);
+            match token {
+                Ok(tok) => tokens.push(Token {
+                    inner: tok,
+                    span: Span {
+                        line: line_num,
+                        range: spanned,
+                        source: Source::String(source.clone()),
+                    },
+                }),
+                Err(err) => errs.push(err)
+            }
+        }
+        // Add one as well to compensate for the newline.
+        character += line.len() + 1;
+
+        tokens.push(Token {
+            inner: TokenInner::NewLine,
+            span: Span {
+                line: line_num,
+                range: character - 1..character,
+                source: Source::String(source.clone()),
+            },
+        })
     }
 
     if errs.is_empty() {
@@ -121,6 +166,7 @@ pub enum TokenInner {
     Address(u16),
 
     #[regex(r"[_a-zA-Z][_a-zA-Z0-9]", Ident::any)]
+    #[regex(r"@[_a-zA-Z][_a-zA-Z0-9]", Ident::pre_proc)]
     #[regex(r"%[_a-zA-Z][_a-zA-Z0-9]", Ident::macro_variable)]
     #[regex(r"\$[_a-zA-Z][_a-zA-Z0-9]", Ident::variable)]
     Ident(Ident),
@@ -290,10 +336,11 @@ impl TokenInner {
 #[derive(Debug, PartialEq, Clone)]
 pub enum Ident {
     Register(Register),
-    Keyword(Keyword),
+    PreProc(PreProc),
     Instruction(Instruction),
     Variable(String),
     MacroVariable(String),
+    Ty(Ty),
     Ident(String),
 }
 
@@ -314,13 +361,15 @@ impl Ident {
         Ok(Ident::MacroVariable(slice.to_owned()))
     }
 
+    fn pre_proc(lex: &mut Lexer<TokenInner>) -> Result<Ident, Diagnostic> {
+        Ok(Ident::PreProc(PreProc::from_str(lex.slice())?))
+    }
+
     fn any(lex: &mut Lexer<TokenInner>) -> Ident {
         let slice = lex.slice();
 
         if let Ok(register) = Register::from_str(slice) {
             Ident::Register(register)
-        } else if let Ok(keyword) = Keyword::from_str(slice) {
-            Ident::Keyword(keyword)
         } else if let Ok(instruction) = Instruction::from_str(slice) {
             Ident::Instruction(instruction)
         } else {
@@ -367,22 +416,66 @@ impl FromStr for Register {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub enum Keyword {
-    Imm,
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum PreProc {
+    Variable(Ty),
+    Macro,
+    Define,
+    IfDef,
+    If,
+    Else,
+    ElIf
+}
+
+impl FromStr for PreProc {
+    type Err = Diagnostic;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        use PreProc as PP;
+
+        if let Ok(ty) = Ty::from_str(s) {
+            Ok(PreProc::Variable(ty))
+        } else {
+            match s {
+                "macro" | "MACRO" => Ok(PP::Macro),
+                "define" | "DEFINE" => Ok(PP::Define),
+                "ifdef" | "IFDEF" => Ok(PP::IfDef),
+                "if" | "IF" => Ok(PP::If),
+                "else" | "ELSE" => Ok(PP::Else),
+                "elif" | "ELIF" => Ok(PP::ElIf),
+                _ => Err(Diagnostic::error(format!(""))),
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum Ty {
+    Any,
+    Reg,
+    Hl,
+    Addr,
+    Label,
+    Imm8,
     Imm16,
     Imm32,
     Imm64,
-    Macro,
-
 }
 
-impl FromStr for Keyword {
+impl FromStr for Ty {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            _ => Err(()),
+            "any" => Ok(Ty::Any),
+            "reg" => Ok(Ty::Reg),
+            "hl" => Ok(Ty::Hl),
+            "Addr" => Ok(Ty::Addr),
+            "imm" | "imm8" => Ok(Ty::Imm8),
+            "imm16" => Ok(Ty::Imm16), 
+            "imm32" => Ok(Ty::Imm32),
+            "imm64" => Ok(Ty::Imm64),
+            _ => Err(())
         }
     }
 }
@@ -401,14 +494,29 @@ impl FromStr for Instruction {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum Source {
+    File(Rc<PathBuf>),
+    String(Rc<String>),
+}
+
+impl fmt::Display for Source {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Source::File(path) => write!(f, "{}", path.as_path().display()),
+            Source::String(s) => write!(f, "test string"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Span {
     line: usize,
     range: Range<usize>,
-    source: Rc<PathBuf>,
+    source: Source,
 }
 
 impl Span {
-    pub fn line(&self) -> usize {
+    pub fn line_number(&self) -> usize {
         self.line
     }
 
@@ -420,18 +528,49 @@ impl Span {
         self.range.end
     }
 
-    pub fn source(&self) -> &Path {
+    pub fn source(&self) -> &Source {
         &self.source
+    }
+
+    pub fn line(&self) -> Result<String, Diagnostic> {
+        match &self.source {
+            Source::File(path) => {
+                let file = File::open(path.as_ref()).map_err(|_| Diagnostic::error(format!("Unable to open file {}", path.as_path().display())))?;
+                let reader = BufReader::new(file);
+
+                reader.lines().nth(self.line).ok_or(Diagnostic::error("Line should be fully contained in the source file"))?.map_err(|_| Diagnostic::error(format!("Unable to read line {} from file {}", self.line, path.as_path().display())))
+            },
+            Source::String(s) => s.lines().nth(self.line).ok_or(Diagnostic::error("Line should be fully contained in the source string")).map(|line| line.to_owned())
+        }
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn numbers() {
+    fn success() {
+        let example = r#"
+            127
+            0o177
+            0b0111_1111
+            0x7F
+            '\x22'
+            "hello\nworld"
+            [0xFF70]
+            [200]
+            [0o70]
+            [0b0111_1111]
+            [0xFF70]
+            r1
+            r7
+            // hello
+            ; world
+            /// here's what this does
+        "#;
         println!("{}", std::env::current_dir().unwrap().display());
-        let lexed = match lex("./examples/lex.asm") {
+        let lexed = match lex_string(example) {
             Ok(tokens) => tokens,
             Err(errors) => {
                 for error in errors {

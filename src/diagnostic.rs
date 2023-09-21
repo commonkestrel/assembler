@@ -221,44 +221,20 @@ impl Diagnostic {
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(Location::Span(ref span)) = self.location {
-            let source = fs::read_to_string(span.source()).expect("source file should be readable");
-
-            let indices = indicies_from_indicies(&source, span.start(), span.end())
-                .expect_or_scream("`Span` should be fully contained within the source file");
-            let multi_line = (indices.last_line - indices.first_line) > 0;
+            let line = span.line().unwrap_or_scream();
 
             // Length of the number when converted to decimal, plus one for padding.
-            let spaces = (indices.last_line.checked_ilog10().unwrap_or(0) + 1) as usize;
+            let spaces = (span.line_number().checked_ilog10().unwrap_or(0) + 1) as usize;
 
-            let description = if multi_line {
-                let first = source
-                    .lines()
-                    .nth(indices.first_line)
-                    .expect_or_scream("`Span` should be contained in the source file");
-                format!(
-                    "{cap:>width$}\
-                        {first:<spaces$}
-                        {cap:>width$}
-                    ",
-                    cap = "|",
-                    spaces = spaces.max(4),
-                    width = (spaces + 1).max(5)
-                )
-            } else {
-                let line = source
-                    .lines()
-                    .nth(indices.first_line + 1)
-                    .expect_or_scream("`Span` should be contained in the source file");
-                format!(
-                    "{cap:>width$}\
-                        {n:<spaces$}| {line}\
-                        {cap:>width$}
-                    ",
-                    n = indices.first_line,
-                    cap = "|",
-                    width = spaces + 1,
-                )
-            };
+            let description = format!(
+                "{cap:>width$}\
+                 {n:<spaces$}| {line}\
+                 {cap:>width$}
+                ",
+                n = span.line_number(),
+                cap = "|",
+                width = spaces + 1,
+            );
 
             let children = self.children.iter().fold(String::new(), |fold, child| {
                 fold + &format!("{:>width$} {}", "=", child, width = spaces + 1)
@@ -268,9 +244,9 @@ impl fmt::Display for Diagnostic {
                 f,
                 "{}\n   --> {}:{}:{}\n{}\n{}",
                 self.format_message(true),
-                span.source().display(),
-                indices.first_line,
-                indices.first_char,
+                span.source(),
+                span.line_number(),
+                span.start(),
                 description,
                 children,
             )
