@@ -69,6 +69,7 @@ dependencies = [
  "colored",
  "logos",
  "markdown",
+ "once_cell",
  "regex",
 ]
 
