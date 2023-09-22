@@ -3,10 +3,8 @@ use crate::VERBOSITY;
 use super::lex::Span;
 
 use colored::{ColoredString, Colorize};
-use std::{
-    fmt, fs,
-    io::{self, Write},
-};
+use once_cell::sync::Lazy;
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Location {
@@ -17,6 +15,9 @@ enum Location {
         column: u32,
     },
 }
+
+static BLUE_PIPE: Lazy<ColoredString> = Lazy::new(|| "|".cyan().bold());
+static BLUE_ARROW: Lazy<ColoredString> = Lazy::new(|| "-->".cyan().bold());
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Diagnostic {
@@ -195,7 +196,7 @@ impl Diagnostic {
     }
 
     pub fn emit(self) {
-        if self.level <= *VERBOSITY.get().unwrap_or_scream() {
+        if self.level <= *VERBOSITY.get().expect_or_scream("VERBOSITY should be set on program init") {
             self.force_emit()
         }
     }
@@ -224,16 +225,19 @@ impl fmt::Display for Diagnostic {
             let line = span.line().unwrap_or_scream();
 
             // Length of the number when converted to decimal, plus one for padding.
-            let spaces = (span.line_number().checked_ilog10().unwrap_or(0) + 1) as usize;
+            let spaces = (span.line_number().checked_ilog10().unwrap_or(0) + 2) as usize;
 
             let description = format!(
-                "{cap:>width$}\
-                 {n:<spaces$}| {line}\
-                 {cap:>width$}
+                "{cap:>width$}\n\
+                 {n} {line}\n\
+                 {cap:>width$}{blank:>start$}{blank:^>end$}
                 ",
-                n = span.line_number(),
-                cap = "|",
+                n = format!("{n:<spaces$}|", n = span.line_number()).cyan().bold(),
+                cap = Lazy::force(&BLUE_PIPE),
                 width = spaces + 1,
+                blank = "",
+                start = span.start() + 1,
+                end = span.end() - span.start(),
             );
 
             let children = self.children.iter().fold(String::new(), |fold, child| {
@@ -242,13 +246,15 @@ impl fmt::Display for Diagnostic {
 
             write!(
                 f,
-                "{}\n   --> {}:{}:{}\n{}\n{}",
+                "{}\n{arrow:>width$} {}:{}:{}\n{}\n{}",
                 self.format_message(true),
                 span.source(),
                 span.line_number(),
                 span.start(),
                 description,
                 children,
+                arrow = Lazy::force(&BLUE_ARROW),
+                width = spaces + 2,
             )
         } else if let Some(Location::Panic {
             ref path,
@@ -298,7 +304,7 @@ impl Default for Diagnostic {
     fn default() -> Self {
         // We use error here since the only place
         // this method is called is in `logos::Logos::error`
-        Diagnostic::error("default error message")
+        Diagnostic::error("Unrecognized token")
     }
 }
 
@@ -319,44 +325,6 @@ impl Child {
             message: message.into(),
         }
     }
-}
-struct Indicies {
-    first_line: usize,
-    first_char: usize,
-    last_line: usize,
-    last_char: usize,
-}
-
-fn indicies_from_indicies(s: &str, mut first: usize, mut last: usize) -> Option<Indicies> {
-    let mut current_index = 0;
-    if first > last {
-        std::mem::swap(&mut first, &mut last);
-    }
-    let mut first_line = 0;
-    let mut first_char = 0;
-    let mut first_found = false;
-
-    for (i, line) in s.lines().enumerate() {
-        current_index += line.len();
-
-        if current_index >= first && !first_found {
-            first_char = first - (current_index - line.len());
-            first_line = i;
-            first_found = true;
-        }
-
-        if current_index >= last {
-            let last_char = last - (current_index - line.len());
-            return Some(Indicies {
-                first_line,
-                first_char,
-                last_char,
-                last_line: i,
-            });
-        }
-    }
-
-    None
 }
 
 fn italic_code(message: &str) -> String {
