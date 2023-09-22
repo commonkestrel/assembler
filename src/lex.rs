@@ -24,7 +24,6 @@ pub fn lex<P: AsRef<Path>>(path: P) -> LexResult {
     let mut tokens: TokenStream = Vec::new();
     let mut errs: Errors = Vec::new();
     let source = Rc::new(path.as_ref().to_path_buf());
-    let mut character = 0;
 
     match File::open(&path) {
         Ok(file) => {
@@ -32,7 +31,7 @@ pub fn lex<P: AsRef<Path>>(path: P) -> LexResult {
                 match line {
                     Ok(line) => {
                         for (token, span) in TokenInner::lexer(&line).spanned() {
-                            let spanned = (span.start + character)..(span.end + character);
+                            let spanned = span.start..span.end;
                             match token {
                                 Ok(tok) => tokens.push(Token {
                                     inner: tok,
@@ -43,6 +42,7 @@ pub fn lex<P: AsRef<Path>>(path: P) -> LexResult {
                                     },
                                 }),
                                 Err(mut err) => {
+                                    println!("{line} : {spanned:?}");
                                     err.set_span(Span {
                                         line: line_num,
                                         range: spanned,
@@ -52,14 +52,12 @@ pub fn lex<P: AsRef<Path>>(path: P) -> LexResult {
                                 }
                             }
                         }
-                        // Add one as well to compensate for the newline.
-                        character += line.len() + 1;
 
                         tokens.push(Token {
                             inner: TokenInner::NewLine,
                             span: Span {
                                 line: line_num,
-                                range: character - 1..character,
+                                range: 0..0,
                                 source: Source::File(source.clone()),
                             },
                         })
@@ -138,6 +136,7 @@ where
 #[derive(Logos, Clone, Debug, PartialEq)]
 #[logos(error = Diagnostic)]
 #[logos(skip r"[(//);][^\n]*")]
+#[logos(skip r"[ \n\t\f]")]
 pub enum TokenInner {
     #[regex(r"0b[01][_01]*", TokenInner::binary)]
     #[regex(r"0o[0-7][_0-7]*", TokenInner::octal)]
@@ -154,10 +153,15 @@ pub enum TokenInner {
     Path(PathBuf),
 
     #[regex(r"'[\x00-\x7F]*'", TokenInner::char)]
+    #[regex(r#"'\\[(\\)n"at0rbfv]'"#, TokenInner::char)]
+    #[regex(r"'\\x[[:xdigit:]]{1,2}'", TokenInner::char)]
     Char(u8),
 
     #[regex(r"\n")]
     NewLine,
+
+    #[regex(r",")]
+    Comma,
 
     #[regex(r"\[0b[01][_01]*\]", TokenInner::addr_bin)]
     #[regex(r"\[0o[0-7][_0-7]*\]", TokenInner::addr_oct)]
@@ -165,10 +169,10 @@ pub enum TokenInner {
     #[regex(r"\[0x[0-9a-fA-F][_0-9a-fA-F]*\]", TokenInner::addr_hex)]
     Address(u16),
 
-    #[regex(r"[_a-zA-Z][_a-zA-Z0-9]", Ident::any)]
-    #[regex(r"@[_a-zA-Z][_a-zA-Z0-9]", Ident::pre_proc)]
-    #[regex(r"%[_a-zA-Z][_a-zA-Z0-9]", Ident::macro_variable)]
-    #[regex(r"\$[_a-zA-Z][_a-zA-Z0-9]", Ident::variable)]
+    #[regex(r"[_a-zA-Z][_a-zA-Z0-9]*", Ident::any)]
+    #[regex(r"@[_a-zA-Z][_a-zA-Z0-9]*", Ident::pre_proc)]
+    #[regex(r"%[_a-zA-Z][_a-zA-Z0-9]*", Ident::macro_variable)]
+    #[regex(r"\$[_a-zA-Z][_a-zA-Z0-9]*", Ident::variable)]
     Ident(Ident),
 
     #[regex(r"///[^\n]*", TokenInner::doc)]
@@ -243,7 +247,7 @@ impl TokenInner {
             .strip_suffix('\'')
             .ok_or(Diagnostic::error("char not suffixed with `'`"))?;
 
-        let escaped = unescape_str(s).map_err(|err| {
+        let escaped = unescape_str(inner).map_err(|err| {
             Diagnostic::error(match err {
                 UnescapeError::InvalidAscii(byte) => format!("invalid ASCII character: {byte}"),
                 UnescapeError::UnmatchedBackslash(index) => {
@@ -516,8 +520,12 @@ pub struct Span {
 }
 
 impl Span {
+    /// Line number for display.
+    ///
+    /// # Note
+    /// Since this is for display, 1 is added to the line index.
     pub fn line_number(&self) -> usize {
-        self.line
+        self.line + 1
     }
 
     pub fn start(&self) -> usize {
@@ -551,26 +559,7 @@ mod tests {
 
     #[test]
     fn success() {
-        let example = r#"
-            127
-            0o177
-            0b0111_1111
-            0x7F
-            '\x22'
-            "hello\nworld"
-            [0xFF70]
-            [200]
-            [0o70]
-            [0b0111_1111]
-            [0xFF70]
-            r1
-            r7
-            // hello
-            ; world
-            /// here's what this does
-        "#;
-        println!("{}", std::env::current_dir().unwrap().display());
-        let lexed = match lex_string(example) {
+        let lexed = match lex("./examples/lex.asm") {
             Ok(tokens) => tokens,
             Err(errors) => {
                 for error in errors {
