@@ -1,13 +1,16 @@
-pub(crate) mod ascii;
-pub(crate) mod diagnostic;
+mod ascii;
+mod diagnostic;
 mod lex;
 mod parse;
-use diagnostic::Diagnostic;
-pub(crate) use diagnostic::{OptionalScream, ResultScream};
+mod token;
+
+pub(crate) use diagnostic::{Diagnostic, OptionalScream, ResultScream};
 
 use clap::Parser;
 use clap_verbosity_flag::{Level, WarnLevel};
+use parse::Define;
 use std::sync::OnceLock;
+use std::str::FromStr;
 
 pub type Errors = Vec<Diagnostic>;
 
@@ -16,6 +19,12 @@ pub type Errors = Vec<Diagnostic>;
 struct Args {
     #[command(flatten)]
     verbose: clap_verbosity_flag::Verbosity<WarnLevel>,
+    /// CPU frequency in HZ
+    #[arg(long, short, default_value_t = 500_000)]
+    frequency: u64,
+
+    #[arg(short = 'D')]
+    defines: Vec<Define>,
 }
 
 pub static VERBOSITY: OnceLock<Verbosity> = OnceLock::new();
@@ -41,7 +50,9 @@ fn main() {
     Diagnostic::warning("watch out for this pal").emit();
     Diagnostic::help("by the way, do this next time").emit();
     Diagnostic::note("checking disk 2").emit();
-    Err::<usize, usize>(42).unwrap_or_scream();
+    // Err::<usize, usize>(42).unwrap_or_scream();
+
+    Diagnostic::note(format!("{:?}", args.defines)).emit();
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
