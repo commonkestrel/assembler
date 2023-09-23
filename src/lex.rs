@@ -5,6 +5,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use crate::Errors;
 use crate::ascii::{unescape_str, AsciiStr, UnescapeError};
@@ -20,10 +21,27 @@ pub struct Token {
     pub span: Span,
 }
 
+impl FromStr for Token {
+    type Err = Diagnostic;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut lex = TokenInner::lexer(s).spanned();
+        let (token, span) = lex.next().ok_or_else(|| Diagnostic::error("No tokens found in string"))?;
+        let span = Span { line: 0, range: span, source: Source::String(Arc::new(s.to_owned())) };
+        match token {
+            Ok(inner) => Ok(Token {inner, span}),
+            Err(mut err) => {
+                err.set_span(span);
+                Err(err)
+            }
+        }
+    }
+}
+
 pub fn lex<P: AsRef<Path>>(path: P) -> LexResult {
     let mut tokens: TokenStream = Vec::new();
     let mut errs: Errors = Vec::new();
-    let source = Rc::new(path.as_ref().to_path_buf());
+    let source = Arc::new(path.as_ref().to_path_buf());
 
     match File::open(&path) {
         Ok(file) => {
@@ -42,7 +60,6 @@ pub fn lex<P: AsRef<Path>>(path: P) -> LexResult {
                                     },
                                 }),
                                 Err(mut err) => {
-                                    println!("{line} : {spanned:?}");
                                     err.set_span(Span {
                                         line: line_num,
                                         range: spanned,
@@ -96,7 +113,7 @@ where
     let mut tokens: TokenStream = Vec::new();
     let mut errs: Errors = Vec::new();
     let mut character = 0;
-    let source = Rc::new(file.into());
+    let source = Arc::new(file.into());
 
     for (line_num, line) in source.lines().enumerate() {
         for (token, span) in TokenInner::lexer(&line).spanned() {
@@ -135,7 +152,7 @@ where
 
 #[derive(Logos, Clone, Debug, PartialEq)]
 #[logos(error = Diagnostic)]
-#[logos(skip r"[(//);][^\n]*")]
+#[logos(skip r"(//|;)[^\n]*")]
 #[logos(skip r"[ \n\t\f]")]
 pub enum TokenInner {
     #[regex(r"0b[01][_01]*", TokenInner::binary)]
@@ -157,12 +174,6 @@ pub enum TokenInner {
     #[regex(r"'\\x[[:xdigit:]]{1,2}'", TokenInner::char)]
     Char(u8),
 
-    #[regex(r"\n")]
-    NewLine,
-
-    #[regex(r",")]
-    Comma,
-
     #[regex(r"\[0b[01][_01]*\]", TokenInner::addr_bin)]
     #[regex(r"\[0o[0-7][_0-7]*\]", TokenInner::addr_oct)]
     #[regex(r"\[[0-9][_0-9]*\]", TokenInner::addr_dec)]
@@ -173,10 +184,40 @@ pub enum TokenInner {
     #[regex(r"@[_a-zA-Z][_a-zA-Z0-9]*", Ident::pre_proc)]
     #[regex(r"%[_a-zA-Z][_a-zA-Z0-9]*", Ident::macro_variable)]
     #[regex(r"\$[_a-zA-Z][_a-zA-Z0-9]*", Ident::variable)]
+    #[regex(r"()", Ident::punc)]
     Ident(Ident),
+
+    #[regex(r"[\(\)\[\]{}]", TokenInner::delim)]
+    Delimeter(Delimeter),
+
+    #[token("=", Punctuation::eq)]
+    #[token("==", Punctuation::eq_eq)]
+    #[token("!=", Punctuation::ne)]
+    #[token("<", Punctuation::lt)]
+    #[token("<=", Punctuation::le)]
+    #[token(">", Punctuation::gt)]
+    #[token(">=", Punctuation::ge)]
+    #[token("&", Punctuation::and)]
+    #[token("&&", Punctuation::and_and)]
+    #[token("|", Punctuation::or)]
+    #[token("||", Punctuation::or_or)]
+    #[token("^", Punctuation::caret)]
+    #[token("!", Punctuation::not)]
+    #[token("~", Punctuation::not)]
+    #[token("+", Punctuation::plus)]
+    #[token("-", Punctuation::minus)]
+    #[token("*", Punctuation::star)]
+    #[token("/", Punctuation::slash)]
+    #[token("<<", Punctuation::shl)]
+    #[token(">>", Punctuation::shr)]
+    #[token(",", Punctuation::comma)]
+    Punctuation(Punctuation),
 
     #[regex(r"///[^\n]*", TokenInner::doc)]
     Doc(String),
+    
+    #[token("\n")]
+    NewLine,
 }
 
 impl TokenInner {
@@ -327,6 +368,19 @@ impl TokenInner {
         })
     }
 
+    fn delim(lex:&mut Lexer<TokenInner>) -> Option<Delimeter> {
+        use Delimeter as D;
+        match lex.slice() {
+            "(" => Some(D::OpenParen),
+            ")" => Some(D::ClosedParen),
+            "[" => Some(D::OpenBracket),
+            "]" => Some(D::ClosedBracket),
+            "{" => Some(D::OpenBrace),
+            "}" => Some(D::ClosedBrace),
+            _ => None,
+        }
+    }
+
     fn doc(lex: &mut Lexer<TokenInner>) -> Result<String, Diagnostic> {
         Ok(lex
             .slice()
@@ -428,26 +482,28 @@ pub enum PreProc {
     IfDef,
     If,
     Else,
-    ElIf
+    ElIf,
 }
 
 impl FromStr for PreProc {
     type Err = Diagnostic;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let argument = s.strip_prefix("@").ok_or(Diagnostic::error("Preprocessor argument not prefixed by `@`"))?;
+        
         use PreProc as PP;
 
-        if let Ok(ty) = Ty::from_str(s) {
+        if let Ok(ty) = Ty::from_str(argument) {
             Ok(PreProc::Variable(ty))
         } else {
-            match s {
+            match argument {
                 "macro" | "MACRO" => Ok(PP::Macro),
                 "define" | "DEFINE" => Ok(PP::Define),
                 "ifdef" | "IFDEF" => Ok(PP::IfDef),
                 "if" | "IF" => Ok(PP::If),
                 "else" | "ELSE" => Ok(PP::Else),
                 "elif" | "ELIF" => Ok(PP::ElIf),
-                _ => Err(Diagnostic::error(format!(""))),
+                _ => Err(Diagnostic::error(format!("Unrecognized preprocessor argument"))),
             }
         }
     }
@@ -497,17 +553,104 @@ impl FromStr for Instruction {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Delimeter {
+    OpenParen,
+    ClosedParen,
+    OpenBracket,
+    ClosedBracket,
+    OpenBrace,
+    ClosedBrace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Punctuation {
+    /// `=` (variable assignment)
+    Eq,
+    /// `=` (pre-proc eval: equality)
+    EqEq,
+    /// `!=` (pre-proc eval: not equal)
+    Ne,
+    /// `<` (pre-proc eval: less than)
+    Lt,
+    /// `<=` (pre-proc eval: less or equal)
+    Le,
+    /// `>` (pre-proc eval: greater than)
+    Gt,
+    /// `>=` (pre-proc eval: greater or equal)
+    Ge,
+    /// `&` (expression parsing: bitwise and)
+    And,
+    /// `&&` (pre-proc eval: and)
+    AndAnd,
+    /// `|` (expression parsing: bitwise or)
+    Or,
+    /// `||` (pre-proc eval: or)
+    OrOr,
+    /// `^` (expression parsing: bitwise xor)
+    Caret,
+    /// `!` or `~` (expression parsing: bitwise not)
+    Not,
+    /// `/` (expression parsing: division) (pre-proc eval: path seperator)
+    Slash,
+    /// `+` (expression parsing: addition)
+    Plus,
+    /// `-` (expression parsing: subtraction)
+    Minus,
+    /// `*` (expression parsing: multiplication)
+    Star,
+    /// `<<` (expression parsing: shift left)
+    Shl,
+    /// `>>` (expression parsing: shift right)
+    Shr,
+    /// `,` (argument seperator)
+    Comma,
+}
+
+macro_rules! varient {
+    ($($fn:ident -> $ty:ident::$varient:ident),* $(,)?) => {
+        $(fn $fn(_: &mut Lexer<TokenInner>) -> $ty {
+            $ty::$varient
+        })*
+    };
+}
+
+impl Punctuation {
+    varient! {
+        eq -> Punctuation::Eq,
+        eq_eq -> Punctuation::EqEq,
+        ne -> Punctuation::Ne,
+        lt -> Punctuation::Lt,
+        le -> Punctuation::Le,
+        gt -> Punctuation::Gt,
+        ge -> Punctuation::Ge,
+        and -> Punctuation::And,
+        and_and -> Punctuation::AndAnd,
+        or -> Punctuation::Or,
+        or_or -> Punctuation::OrOr,
+        caret -> Punctuation::Caret,
+        not -> Punctuation::Not,
+        slash -> Punctuation::Slash,
+        plus -> Punctuation::Plus,
+        minus -> Punctuation::Minus,
+        star -> Punctuation::Star,
+        shl -> Punctuation::Shl,
+        shr -> Punctuation::Shr,
+        comma -> Punctuation::Comma,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Source {
-    File(Rc<PathBuf>),
-    String(Rc<String>),
+    File(Arc<PathBuf>),
+    String(Arc<String>),
 }
 
 impl fmt::Display for Source {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Source::File(path) => write!(f, "{}", path.as_path().display()),
-            Source::String(s) => write!(f, "test string"),
+            Source::String(s) => if s.contains('\n') { Ok(()) } else { write!(f, "\"{s}\"") },
         }
     }
 }
