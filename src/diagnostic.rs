@@ -2,9 +2,10 @@ use crate::VERBOSITY;
 
 use super::lex::Span;
 
-use colored::{ColoredString, Colorize};
+use colored::{ColoredString, Colorize, Color};
 use once_cell::sync::Lazy;
 use std::fmt;
+use std::error::Error;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Location {
@@ -230,14 +231,17 @@ impl fmt::Display for Diagnostic {
             let description = format!(
                 "{cap:>width$}\n\
                  {n} {line}\n\
-                 {cap:>width$}{blank:>start$}{blank:^>end$}
+                 {cap:>width$}{pointer}
                 ",
                 n = format!("{n:<spaces$}|", n = span.line_number()).cyan().bold(),
                 cap = Lazy::force(&BLUE_PIPE),
                 width = spaces + 1,
-                blank = "",
-                start = span.start() + 1,
-                end = span.end() - span.start(),
+                pointer = format!(
+                    "{blank:>start$}{blank:^>end$}",
+                    blank = "",
+                    start = span.start() + 1,
+                    end = span.end() - span.start(),
+                ).color(self.level.color())
             );
 
             let children = self.children.iter().fold(String::new(), |fold, child| {
@@ -276,6 +280,9 @@ impl fmt::Display for Diagnostic {
     }
 }
 
+impl Error for Diagnostic {}
+
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Level {
     /// An error.
@@ -297,6 +304,17 @@ impl PartialEq<crate::Verbosity> for Level {
 impl PartialOrd<crate::Verbosity> for Level {
     fn partial_cmp(&self, other: &crate::Verbosity) -> Option<std::cmp::Ordering> {
         (*self as u8).partial_cmp(&(*other as u8))
+    }
+}
+
+impl Level {
+    pub fn color(&self) -> Color {
+        match self {
+            Level::Error => Color::BrightRed,
+            Level::Warning => Color::Yellow,
+            Level::Help => Color::BrightBlue,
+            Level::Note => Color::White,
+        }
     }
 }
 
