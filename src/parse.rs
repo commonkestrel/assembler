@@ -51,6 +51,10 @@ impl<'a> Cursor<'a> {
     {
         R::parse(self)
     }
+
+    pub fn peek(&self) -> Option<&'a Token> {
+        self.buffer.get(self.position)
+    }
 }
 
 impl<'a> Iterator for Cursor<'a> {
