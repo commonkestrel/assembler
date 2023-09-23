@@ -63,7 +63,7 @@ impl PartialEq<&str> for AsciiStr {
 
 impl fmt::Display for AsciiStr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", unsafe {
+        write!(f, "\"{}\"", unsafe {
             std::str::from_utf8_unchecked(&self.inner)
         })
     }
