@@ -14,3 +14,9 @@
 // hello
 ldi A, 0xFF ; world
 /// here's what this does
+
+global _start
+_start:
+
+@org 0x00
+
