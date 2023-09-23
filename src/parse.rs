@@ -1,34 +1,51 @@
+//! WIP token tree parsing
+//! Split into three passes:
+//! 1. Preprocessor expansion
+//! 2. Instruction parsing
+//! 3. Macro expansion
+//! 
+//! ## Preprocessor Expansion
+//! 
+//! Preproc expansion includes the obvious things, like @define, @paste, etc.,
+//! but also expressions (`(1 << 2) & (1 << 5)`), and macros.
+//! 
+//! ## Instruction Parsing
+//! 
+//! Parses tokens like `ldi A, 0x7F` into recognizable structures.
+//! 
+//! ## Macro Expansion
+//! 
+//! Recursivly expands macros, leaving the token tree with just instructions.
+
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use crate::Errors;
 use crate::lex::{ self, TokenStream, TokenInner, Token, Span, Ident, Register, Ty };
 use crate::diagnostic::{Diagnostic, OptionalScream};
 
-pub fn parse(stream: TokenStream) -> Result<(Errors), Errors> {
-    todo!()
+pub fn parse(stream: TokenStream) -> Result<(), Errors> {
+    Err(vec![Diagnostic::error("Parsing not yet implemented")])
 }
 
-trait Parse: Sized {
+pub trait Parse: Sized {
     fn parse(cursor: &mut Cursor) -> Result<Self, Diagnostic>;
 }
 
+pub struct Cursor<'a> {
+    buffer: &'a [Token],
+    position: usize,
+}
+
 impl<'a> Cursor<'a> {
-    fn new(buffer: &'a [Token]) -> Self {
+    pub fn new(buffer: &'a [Token]) -> Self {
         Self {
             buffer,
             position: 0,
         }
     }
 
-    fn next(&mut self) -> Option<Token> {
-        let ret = self.buffer[self.position].clone();
-
-        self.position += 1;
-
-        Some(ret)
-    }
-
-    fn parse<R>(&mut self) -> Result<R, Diagnostic>
+    pub fn parse<R>(&mut self) -> Result<R, Diagnostic>
     where
         R: Parse
     {
@@ -36,9 +53,41 @@ impl<'a> Cursor<'a> {
     }
 }
 
-struct Cursor<'a> {
-    buffer: &'a [Token],
-    position: usize,
+impl<'a> Iterator for Cursor<'a> {
+    type Item = &'a Token;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ret = self.buffer.get(self.position);
+
+        self.position += 1;
+
+        ret
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Define {
+    name: String,
+    value: Token,
+}
+
+impl Parse for Define {
+    fn parse(cursor: &mut Cursor) -> Result<Self, Diagnostic> {
+        todo!()
+    }
+}
+
+impl FromStr for Define {
+    type Err = Diagnostic;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let pos = s.find("=").ok_or_else(|| Diagnostic::error(format!("invalid KEY=value pair: no `=` found in `{s}`")))?;
+        
+        Ok(Define {
+            name: s[..pos].to_owned(),
+            value: s[pos + 1..].parse()?,
+        })
+    }
 }
 
 pub enum Expanded {
