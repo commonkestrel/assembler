@@ -1,4 +1,4 @@
-use crate::lex::{ Span, Delimeter, Punctuation, Ident, PreProc };
+use crate::lex::{ self, Span, Delimeter, Punctuation, PreProc };
 use crate::parse::{Parse, Cursor};
 use crate::ascii::AsciiStr;
 use crate::Diagnostic;
@@ -49,30 +49,30 @@ macro_rules! Token {
 /// 
 /// `parsable!{ "+":  }
 macro_rules! parsable {
-    ($($symbol:literal$(, $alt:literal)?; match $token:ident($inner:pat) => $name:ident$({$($field:ident: $ty:ty)*})?),* $(,)?) => {
+    ($($symbol:literal$(, $alt:literal)?; match $token:ident($inner:pat) => $name:ident$({$($v:vis $field:ident: $ty:ty)*})?),* $(,)?) => {
         $(
-            #[derive(Debug, Clone)]
+            #[derive(Debug, Clone, PartialEq)]
             pub struct $name {
-                span: $crate::lex::Span,
-                $($($field: $ty),*)?
+                pub span: $crate::lex::Span,
+                $($($v $field: $ty),*)?
             }
 
             impl $crate::parse::Parse for $name {
                 fn parse(cursor: &mut $crate::parse::Cursor) -> Result<Self, Diagnostic> {
                     match cursor.next() {
-                        Some($crate::lex::Token { inner: $crate::lex::TokenInner::$token($inner), span }) => Ok($name{ span: span.clone(), $($($field),*)? }),
+                        Some($crate::lex::Token { inner: $crate::lex::TokenInner::$token($inner), span }) => Ok($name{ span: span.clone(), $($($field: ::std::borrow::ToOwned::to_owned($field)),*)? }),
                         _ => Err(Diagnostic::error(concat!("Expected `", $symbol, "`"$(, "or `", $alt)?))),
                     }
                 }
             }
         )*
     };
-    ($($($symbol:ident)+; match $token:ident($inner:pat) => $name:ident$({$($field:ident: $ty:ty)*})?),* $(,)?) => {
+    ($($($symbol:ident)+; match $token:ident($inner:pat) => $name:ident$({$($v:vis $field:ident: $ty:ty)*})?),* $(,)?) => {
         $(
-            #[derive(Debug, Clone)]
+            #[derive(Debug, Clone, PartialEq)]
             pub struct $name {
-                span: $crate::lex::Span,
-                $($($field: $ty),*)?
+                pub span: $crate::lex::Span,
+                $($($v $field: $ty),*)?
             }
 
             impl $crate::parse::Parse for $name {
@@ -127,23 +127,34 @@ parsable! {
 /* Pre-proc arguments */
 
 parsable! {
-    "@macro"  ; match Ident(Ident::PreProc(PreProc::Macro)) => Macro,
-    "@define" ; match Ident(Ident::PreProc(PreProc::Define)) => Define,
-    "@ifdef"  ; match Ident(Ident::PreProc(PreProc::IfDef)) => IfDef,
-    "@ifndef" ; match Ident(Ident::PreProc(PreProc::IfNDef)) => IfNDef,
-    "@if"     ; match Ident(Ident::PreProc(PreProc::If)) => If,
-    "@else"   ; match Ident(Ident::PreProc(PreProc::Else)) => Else,
-    "@elif"   ; match Ident(Ident::PreProc(PreProc::ElIf)) => ElIf,
-    "@endif"  ; match Ident(Ident::PreProc(PreProc::EndIf)) => EndIf,
-    "@org"    ; match Ident(Ident::PreProc(PreProc::Org)) => Org,
+    "@[type]" ; match Ident(lex::Ident::PreProc(PreProc::Variable(ty))) => Variable {pub ty: lex::Ty},
+    "@include"; match Ident(lex::Ident::PreProc(PreProc::Include)) => Include,
+    "@macro"  ; match Ident(lex::Ident::PreProc(PreProc::Macro)) => Macro,
+    "@define" ; match Ident(lex::Ident::PreProc(PreProc::Define)) => Define,
+    "@ifdef"  ; match Ident(lex::Ident::PreProc(PreProc::IfDef)) => IfDef,
+    "@ifndef" ; match Ident(lex::Ident::PreProc(PreProc::IfNDef)) => IfNDef,
+    "@if"     ; match Ident(lex::Ident::PreProc(PreProc::If)) => If,
+    "@else"   ; match Ident(lex::Ident::PreProc(PreProc::Else)) => Else,
+    "@elif"   ; match Ident(lex::Ident::PreProc(PreProc::ElIf)) => ElIf,
+    "@endif"  ; match Ident(lex::Ident::PreProc(PreProc::EndIf)) => EndIf,
+    "@org"    ; match Ident(lex::Ident::PreProc(PreProc::Org)) => Org,
+}
+
+/* Identifiers */
+
+parsable! {
+    register; match Ident(lex::Ident::Register(reg)) => Register{pub reg: lex::Register},
+    identifier; match Ident(lex::Ident::Ident(value)) => Ident{pub value: String},
+    instruction; match Ident(lex::Ident::Instruction(instruction)) => Instruction{pub instruction: lex::Instruction},
+    type; match Ident(lex::Ident::Ty(ty)) => Ty{pub ty: lex::Ty},
 }
 
 /* Literals */
 
 parsable!{
-    integer literal; match Immediate(value) => Immediate{value: u64},
-    string literal; match String(value) => LitString{value: AsciiStr},
-    character literal; match Char(ascii) => Char{ascii: u8},
-    address; match Address(addr) => Address{addr: u16},
-    doc string; match Doc(md) => Doc{md: String},
+    integer literal; match Immediate(value) => Immediate{pub value: u64},
+    string literal; match String(value) => LitString{pub value: Box<AsciiStr>},
+    character literal; match Char(ascii) => Char{pub ascii: u8},
+    address; match Address(addr) => Address{pub addr: u16},
+    doc string; match Doc(md) => Doc{pub md: Box<String>},
 }
