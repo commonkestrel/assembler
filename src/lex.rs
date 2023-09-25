@@ -1,5 +1,5 @@
 use std::fmt;
-use std::fs::{File, self};
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -7,9 +7,9 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::Errors;
 use crate::ascii::{unescape_str, AsciiStr, UnescapeError};
 use crate::diagnostic::{Diagnostic, OptionalScream, ResultScream};
+use crate::Errors;
 use logos::{Lexer, Logos};
 
 pub type TokenStream = Vec<Token>;
@@ -26,10 +26,16 @@ impl FromStr for Token {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut lex = TokenInner::lexer(s).spanned();
-        let (token, span) = lex.next().ok_or_else(|| Diagnostic::error("No tokens found in string"))?;
-        let span = Span { line: 0, range: span, source: Source::String(Arc::new(s.to_owned())) };
+        let (token, span) = lex
+            .next()
+            .ok_or_else(|| Diagnostic::error("No tokens found in string"))?;
+        let span = Span {
+            line: 0,
+            range: span,
+            source: Source::String(Arc::new(s.to_owned())),
+        };
         match token {
-            Ok(inner) => Ok(Token {inner, span}),
+            Ok(inner) => Ok(Token { inner, span }),
             Err(mut err) => {
                 err.set_span(span);
                 Err(err)
@@ -127,7 +133,7 @@ where
                         source: Source::String(source.clone()),
                     },
                 }),
-                Err(err) => errs.push(err)
+                Err(err) => errs.push(err),
             }
         }
         // Add one as well to compensate for the newline.
@@ -216,7 +222,7 @@ pub enum TokenInner {
 
     #[regex(r"///[^\n]*", TokenInner::doc)]
     Doc(Box<String>),
-    
+
     #[token("\n")]
     NewLine,
 }
@@ -284,7 +290,8 @@ impl TokenInner {
     }
 
     fn char_from_str(s: &str) -> Result<u8, Diagnostic> {
-        let inner = s.strip_prefix('\'')
+        let inner = s
+            .strip_prefix('\'')
             .ok_or_else(|| Diagnostic::error("char not prefixed with `'`"))?
             .strip_suffix('\'')
             .ok_or_else(|| Diagnostic::error("char not suffixed with `'`"))?;
@@ -314,9 +321,7 @@ impl TokenInner {
         let slice = lex
             .slice()
             .strip_prefix("[0b")
-            .ok_or_else(|| Diagnostic::error(
-                "binary address does not start with `[0b`",
-            ))?
+            .ok_or_else(|| Diagnostic::error("binary address does not start with `[0b`"))?
             .strip_suffix("]")
             .ok_or_else(|| Diagnostic::error("binary address does not end with `]`"))?
             .replace("_", "");
@@ -330,9 +335,7 @@ impl TokenInner {
         let slice = lex
             .slice()
             .strip_prefix("[0o")
-            .ok_or_else(|| Diagnostic::error(
-                "binary address does not start with `[0o`",
-            ))?
+            .ok_or_else(|| Diagnostic::error("binary address does not start with `[0o`"))?
             .strip_suffix("]")
             .ok_or_else(|| Diagnostic::error("binary address does not end with `]`"))?;
 
@@ -358,9 +361,7 @@ impl TokenInner {
         let slice = lex
             .slice()
             .strip_prefix("[0x")
-            .ok_or_else(|| Diagnostic::error(
-                "binary address does not start with `[0x`",
-            ))?
+            .ok_or_else(|| Diagnostic::error("binary address does not start with `[0x`"))?
             .strip_suffix("]")
             .ok_or_else(|| Diagnostic::error("binary address does not end with `]`"))?;
 
@@ -369,7 +370,7 @@ impl TokenInner {
         })
     }
 
-    fn delim(lex:&mut Lexer<TokenInner>) -> Option<Delimeter> {
+    fn delim(lex: &mut Lexer<TokenInner>) -> Option<Delimeter> {
         use Delimeter as D;
         match lex.slice() {
             "(" => Some(D::OpenParen),
@@ -383,12 +384,12 @@ impl TokenInner {
     }
 
     fn doc(lex: &mut Lexer<TokenInner>) -> Result<Box<String>, Diagnostic> {
-        Ok(Box::new(lex
-            .slice()
-            .strip_prefix("///")
-            .ok_or_else(|| Diagnostic::error("doc comment does not start with `///`"))?
-            .trim()
-            .to_owned()
+        Ok(Box::new(
+            lex.slice()
+                .strip_prefix("///")
+                .ok_or_else(|| Diagnostic::error("doc comment does not start with `///`"))?
+                .trim()
+                .to_owned(),
         ))
     }
 }
@@ -495,8 +496,10 @@ impl FromStr for PreProc {
     type Err = Diagnostic;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let argument = s.strip_prefix("@").ok_or_else(|| Diagnostic::error("Preprocessor argument not prefixed by `@`"))?;
-        
+        let argument = s
+            .strip_prefix("@")
+            .ok_or_else(|| Diagnostic::error("Preprocessor argument not prefixed by `@`"))?;
+
         use PreProc as PP;
 
         if let Ok(ty) = Ty::from_str(argument) {
@@ -513,7 +516,9 @@ impl FromStr for PreProc {
                 "elif" | "ELIF" => Ok(PP::ElIf),
                 "endif" | "ENDIF" => Ok(PP::EndIf),
                 "org" | "ORG" => Ok(PP::Org),
-                _ => Err(Diagnostic::error(format!("Unrecognized preprocessor argument"))),
+                _ => Err(Diagnostic::error(format!(
+                    "Unrecognized preprocessor argument"
+                ))),
             }
         }
     }
@@ -544,11 +549,11 @@ impl FromStr for Ty {
             "addr" => Ok(Ty::Addr),
             "label" => Ok(Ty::Label),
             "imm" | "imm8" => Ok(Ty::Imm8),
-            "imm16" => Ok(Ty::Imm16), 
+            "imm16" => Ok(Ty::Imm16),
             "imm32" => Ok(Ty::Imm32),
             "imm64" => Ok(Ty::Imm64),
             "str" => Ok(Ty::Str),
-            _ => Err(())
+            _ => Err(()),
         }
     }
 }
@@ -666,16 +671,22 @@ impl fmt::Display for Source {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Source::File(path) => write!(f, "{}", path.as_path().display()),
-            Source::String(s) => if s.contains('\n') { Ok(()) } else { write!(f, "\"{s}\"") },
+            Source::String(s) => {
+                if s.contains('\n') {
+                    Ok(())
+                } else {
+                    write!(f, "\"{s}\"")
+                }
+            }
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Span {
-    line: usize,
-    range: Range<usize>,
-    source: Source,
+    pub line: usize,
+    pub range: Range<usize>,
+    pub source: Source,
 }
 
 impl Span {
@@ -702,12 +713,32 @@ impl Span {
     pub fn line(&self) -> Result<String, Diagnostic> {
         match &self.source {
             Source::File(path) => {
-                let file = File::open(path.as_ref()).map_err(|_| Diagnostic::error(format!("Unable to open file {}", path.as_path().display())))?;
+                let file = File::open(path.as_ref()).map_err(|_| {
+                    Diagnostic::error(format!("Unable to open file {}", path.as_path().display()))
+                })?;
                 let reader = BufReader::new(file);
 
-                reader.lines().nth(self.line).ok_or_else(|| Diagnostic::error("Line should be fully contained in the source file"))?.map_err(|_| Diagnostic::error(format!("Unable to read line {} from file {}", self.line, path.as_path().display())))
-            },
-            Source::String(s) => s.lines().nth(self.line).ok_or_else(|| Diagnostic::error("Line should be fully contained in the source string")).map(|line| line.to_owned())
+                reader
+                    .lines()
+                    .nth(self.line)
+                    .ok_or_else(|| {
+                        Diagnostic::error("Line should be fully contained in the source file")
+                    })?
+                    .map_err(|_| {
+                        Diagnostic::error(format!(
+                            "Unable to read line {} from file {}",
+                            self.line,
+                            path.as_path().display()
+                        ))
+                    })
+            }
+            Source::String(s) => s
+                .lines()
+                .nth(self.line)
+                .ok_or_else(|| {
+                    Diagnostic::error("Line should be fully contained in the source string")
+                })
+                .map(|line| line.to_owned()),
         }
     }
 }
@@ -740,7 +771,8 @@ mod tests {
 
     #[test]
     fn string() {
-        let example = fs::read_to_string("tests/lex.asm").expect_or_scream("Unable to open file `tests/lex.asm`");
+        let example = fs::read_to_string("tests/lex.asm")
+            .expect_or_scream("Unable to open file `tests/lex.asm`");
         let lexed = match lex_string(example) {
             Ok(tokens) => tokens,
             Err(errors) => {
@@ -753,9 +785,10 @@ mod tests {
 
         println!(
             "{:?}",
-            lexed.into_iter()
-            .map(|tok| tok.inner)
-            .collect::<Vec<TokenInner>>()
+            lexed
+                .into_iter()
+                .map(|tok| tok.inner)
+                .collect::<Vec<TokenInner>>()
         )
     }
 }

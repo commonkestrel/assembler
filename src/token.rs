@@ -1,12 +1,12 @@
-use crate::lex::{ self, Span, Delimeter, Punctuation, PreProc };
-use crate::parse::{Parse, Cursor};
 use crate::ascii::AsciiStr;
+use crate::lex::{self, Delimeter, PreProc, Punctuation, Span};
+use crate::parse::{Cursor, Parse};
 use crate::Diagnostic;
 
 /// A type-macro that expands to the name of the Rust type representation of a given token.
-/// 
+///
 /// Commonly used in struct fields, the type of a `let` statement, or generics for a [`parse`][Parse::parse] call.
-/// 
+///
 /// Same idea as [syn](https://docs.rs/syn/latest/syn/macro.Token.html).
 #[macro_export]
 macro_rules! Token {
@@ -40,13 +40,13 @@ macro_rules! Token {
     [@elif] => {$crate::token::Elif};
     [@else] => {$crate::token::Else};
     [@endif] => {$crate::token::EndIf};
-    [@org] => {$crate::token::Org}; 
+    [@org] => {$crate::token::Org};
 }
 
 /// Creates a struct for a varient of [`TokenInner`][crate::lex::TokenInner] and implements [`Parse`] for it.
-/// 
+///
 /// # Examples
-/// 
+///
 /// `parsable!{ "+":  }
 macro_rules! parsable {
     ($($symbol:literal$(, $alt:literal)?; match $token:ident($inner:pat) => $name:ident$({$($v:vis $field:ident: $ty:ty)*})?),* $(,)?) => {
@@ -151,7 +151,7 @@ parsable! {
 
 /* Literals */
 
-parsable!{
+parsable! {
     integer literal; match Immediate(value) => Immediate{pub value: u64},
     string literal; match String(value) => LitString{pub value: Box<AsciiStr>},
     character literal; match Char(ascii) => Char{pub ascii: u8},

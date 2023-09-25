@@ -1,5 +1,6 @@
 mod ascii;
 mod diagnostic;
+mod eval;
 mod lex;
 mod parse;
 mod token;
@@ -9,8 +10,7 @@ pub(crate) use diagnostic::{Diagnostic, OptionalScream, ResultScream};
 use clap::Parser;
 use clap_verbosity_flag::{Level, WarnLevel};
 use parse::Define;
-use std::sync::OnceLock;
-use std::str::FromStr;
+use std::{path::PathBuf, sync::OnceLock};
 
 pub type Errors = Vec<Diagnostic>;
 
@@ -25,6 +25,9 @@ struct Args {
 
     #[arg(short = 'D')]
     defines: Vec<Define>,
+
+    #[arg(long, alias = "input")]
+    file: PathBuf,
 }
 
 pub static VERBOSITY: OnceLock<Verbosity> = OnceLock::new();
@@ -53,6 +56,24 @@ fn main() {
     // Err::<usize, usize>(42).unwrap_or_scream();
 
     Diagnostic::note(format!("{:?}", args.defines)).emit();
+    Diagnostic::note(format!(
+        "TokenInner: {}, Token: {}",
+        std::mem::size_of::<lex::TokenInner>(),
+        std::mem::size_of::<lex::Token>()
+    ))
+    .emit();
+
+    let lexed = match lex::lex(args.file) {
+        Ok(tok) => tok,
+        Err(errors) => {
+            for err in errors {
+                err.emit();
+            }
+            Diagnostic::error("lexing failed due to previous errors").scream();
+        }
+    };
+
+    println!("{}", std::mem::size_of_val(&*lexed));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

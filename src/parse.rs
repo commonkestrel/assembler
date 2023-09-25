@@ -3,27 +3,27 @@
 //! 1. Preprocessor expansion
 //! 2. Instruction parsing
 //! 3. Macro expansion
-//! 
+//!
 //! ## Preprocessor Expansion
-//! 
+//!
 //! Preproc expansion includes the obvious things, like @define, @paste, etc.,
 //! but also expressions (`(1 << 2) & (1 << 5)`), and macros.
-//! 
+//!
 //! ## Instruction Parsing
-//! 
+//!
 //! Parses tokens like `ldi A, 0x7F` into recognizable structures.
-//! 
+//!
 //! ## Macro Expansion
-//! 
+//!
 //! Recursivly expands macros, leaving the token tree with just instructions.
 
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::Errors;
-use crate::lex::{ self, TokenStream, TokenInner, Token, Span, Register, Ty };
 use crate::diagnostic::{Diagnostic, OptionalScream};
-use crate::token::{Ident};
+use crate::lex::{self, Register, Span, Token, TokenInner, TokenStream, Ty};
+use crate::token::Ident;
+use crate::Errors;
 use crate::Token;
 
 pub fn parse(stream: TokenStream) -> Result<(), Errors> {
@@ -49,7 +49,7 @@ impl<'a> Cursor<'a> {
 
     pub fn parse<R>(&mut self) -> Result<R, Diagnostic>
     where
-        R: Parse
+        R: Parse,
     {
         R::parse(self)
     }
@@ -96,9 +96,14 @@ impl FromStr for Define {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let pos = match s.find("=") {
             Some(pos) => pos,
-            None => return Ok(Define { name: s.to_owned(), value: None }),
+            None => {
+                return Ok(Define {
+                    name: s.to_owned(),
+                    value: None,
+                })
+            }
         };
-        
+
         Ok(Define {
             name: s[..pos].to_owned(),
             value: Some(s[pos + 1..].parse()?),
@@ -110,7 +115,7 @@ pub enum Expanded {
     Instruction(Instruction),
     Label(Ident),
     SubLabel(Ident),
-    Variable(Variable)
+    Variable(Variable),
 }
 
 pub enum Instruction {
@@ -139,9 +144,7 @@ pub enum Address {
     Label(String),
 }
 
-pub struct Variable {
-    
-}
+pub struct Variable {}
 
 pub struct Parameter {
     types: Vec<Ty>,
@@ -151,10 +154,12 @@ pub struct Parameter {
 impl Parameter {
     fn fits(&self, token: &TokenInner) -> bool {
         for ty in self.types.iter() {
-            if 
-                (matches!(ty, Ty::Addr) && matches!(token, TokenInner::Address(_))) | 
-                (matches!(ty, Ty::Label) && matches!(token, TokenInner::Ident(lex::Ident::Ident(_)))) | 
-                (matches!(ty, Ty::Reg) && matches!(token, TokenInner::Ident(lex::Ident::Register(_)))) {
+            if (matches!(ty, Ty::Addr) && matches!(token, TokenInner::Address(_)))
+                | (matches!(ty, Ty::Label)
+                    && matches!(token, TokenInner::Ident(lex::Ident::Ident(_))))
+                | (matches!(ty, Ty::Reg)
+                    && matches!(token, TokenInner::Ident(lex::Ident::Register(_))))
+            {
                 return true;
             }
         }
@@ -172,11 +177,22 @@ impl MacroDef {
     pub fn expand(self, parameters: Vec<Token>) -> TokenStream {
         let mut expanded = TokenStream::with_capacity(self.tokens.len());
 
-        let parameters: HashMap<String, Token> = HashMap::from_iter(self.parameters.iter().map(|p| p.name.to_owned()).zip(parameters.into_iter()));
+        let parameters: HashMap<String, Token> = HashMap::from_iter(
+            self.parameters
+                .iter()
+                .map(|p| p.name.to_owned())
+                .zip(parameters.into_iter()),
+        );
 
         for token in self.tokens {
             expanded.push(match token.inner {
-                TokenInner::Ident(lex::Ident::MacroVariable(name)) => parameters.get(&name).spanned_expect(token.span, format!("macro variable `{name}` not found in scope")).clone(),
+                TokenInner::Ident(lex::Ident::MacroVariable(name)) => parameters
+                    .get(&name)
+                    .spanned_expect(
+                        token.span,
+                        format!("macro variable `{name}` not found in scope"),
+                    )
+                    .clone(),
                 _ => token,
             })
         }
@@ -189,8 +205,4 @@ pub struct Macro {
     definitions: Vec<MacroDef>,
 }
 
-impl Macro {
-    
-}
-
-
+impl Macro {}
