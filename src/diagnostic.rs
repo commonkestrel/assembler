@@ -2,10 +2,10 @@ use crate::VERBOSITY;
 
 use super::lex::Span;
 
-use colored::{ColoredString, Colorize, Color};
+use colored::{Color, ColoredString, Colorize};
 use once_cell::sync::Lazy;
-use std::fmt;
 use std::error::Error;
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Location {
@@ -197,7 +197,11 @@ impl Diagnostic {
     }
 
     pub fn emit(self) {
-        if self.level <= *VERBOSITY.get().expect_or_scream("VERBOSITY should be set on program init") {
+        if self.level
+            <= *VERBOSITY
+                .get()
+                .expect_or_scream("VERBOSITY should be set on program init")
+        {
             self.force_emit()
         }
     }
@@ -233,7 +237,9 @@ impl fmt::Display for Diagnostic {
                  {n} {line}\n\
                  {cap:>width$}{pointer}
                 ",
-                n = format!("{n:<spaces$}|", n = span.line_number()).cyan().bold(),
+                n = format!("{n:<spaces$}|", n = span.line_number())
+                    .cyan()
+                    .bold(),
                 cap = Lazy::force(&BLUE_PIPE),
                 width = spaces + 1,
                 pointer = format!(
@@ -241,7 +247,8 @@ impl fmt::Display for Diagnostic {
                     blank = "",
                     start = span.start() + 1,
                     end = span.end() - span.start(),
-                ).color(self.level.color())
+                )
+                .color(self.level.color())
             );
 
             let children = self.children.iter().fold(String::new(), |fold, child| {
@@ -281,7 +288,6 @@ impl fmt::Display for Diagnostic {
 }
 
 impl Error for Diagnostic {}
-
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Level {
@@ -403,7 +409,7 @@ pub trait ResultScream<T, E> {
     fn spanned_unwrap(self, span: Span) -> T
     where
         E: fmt::Debug;
-    
+
     /// Returns the contained [`Ok`] value, consuming the `self` value.
     ///
     /// ### Panics
@@ -414,11 +420,11 @@ pub trait ResultScream<T, E> {
     fn expect_or_scream<M: Into<String>>(self, message: M) -> T
     where
         E: fmt::Debug;
-    
+
     fn spanned_expect<M: Into<String>>(self, span: Span, message: M) -> T
     where
         E: fmt::Debug;
-        
+
     fn unwrap_err_or_scream(self) -> E
     where
         T: fmt::Debug;
@@ -447,10 +453,7 @@ impl<T, E> ResultScream<T, E> for Result<T, E> {
     {
         match self {
             Ok(ok) => ok,
-            Err(err) => scream_with(
-                "called `Result::unwrap_or_scream` on an `Err` value",
-                &err,
-            ),
+            Err(err) => scream_with("called `Result::unwrap_or_scream` on an `Err` value", &err),
         }
     }
 
@@ -458,7 +461,7 @@ impl<T, E> ResultScream<T, E> for Result<T, E> {
     #[inline(always)]
     fn spanned_unwrap(self, span: Span) -> T
     where
-        E: fmt::Debug
+        E: fmt::Debug,
     {
         match self {
             Ok(ok) => ok,
@@ -486,11 +489,11 @@ impl<T, E> ResultScream<T, E> for Result<T, E> {
     #[inline(always)]
     fn spanned_expect<M: Into<String>>(self, span: Span, message: M) -> T
     where
-        E: fmt::Debug
+        E: fmt::Debug,
     {
         match self {
             Ok(ok) => ok,
-            Err(err) => scream_with_span(span, message.into().as_ref(), &err)
+            Err(err) => scream_with_span(span, message.into().as_ref(), &err),
         }
     }
 
@@ -555,7 +558,7 @@ impl<T> OptionalScream<T> for Option<T> {
     fn spanned_unwrap(self, span: Span) -> T {
         match self {
             Some(some) => some,
-            None => spanned_scream(span, "called `Option::spanned_unwrap` on a `None` value")
+            None => spanned_scream(span, "called `Option::spanned_unwrap` on a `None` value"),
         }
     }
 
@@ -573,7 +576,7 @@ impl<T> OptionalScream<T> for Option<T> {
     fn spanned_expect<M: Into<String>>(self, span: Span, message: M) -> T {
         match self {
             Some(some) => some,
-            None => spanned_scream(span, message.into().as_ref())
+            None => spanned_scream(span, message.into().as_ref()),
         }
     }
 
