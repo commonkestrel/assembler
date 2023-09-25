@@ -21,8 +21,10 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use crate::Errors;
-use crate::lex::{ self, TokenStream, TokenInner, Token, Span, Ident, Register, Ty };
+use crate::lex::{ self, TokenStream, TokenInner, Token, Span, Register, Ty };
 use crate::diagnostic::{Diagnostic, OptionalScream};
+use crate::token::{Ident};
+use crate::Token;
 
 pub fn parse(stream: TokenStream) -> Result<(), Errors> {
     Err(vec![Diagnostic::error("Parsing not yet implemented")])
@@ -72,12 +74,19 @@ impl<'a> Iterator for Cursor<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Define {
     name: String,
-    value: Token,
+    value: Option<Token>,
 }
 
 impl Parse for Define {
     fn parse(cursor: &mut Cursor) -> Result<Self, Diagnostic> {
-        todo!()
+        let _def: Token![@define] = cursor.parse()?;
+        let name: Ident = cursor.parse()?;
+        let assignment = cursor.next();
+
+        Ok(Define {
+            name: name.value,
+            value: assignment.map(|tok| tok.to_owned()),
+        })
     }
 }
 
@@ -85,11 +94,14 @@ impl FromStr for Define {
     type Err = Diagnostic;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let pos = s.find("=").ok_or_else(|| Diagnostic::error(format!("invalid KEY=value pair: no `=` found in `{s}`")))?;
+        let pos = match s.find("=") {
+            Some(pos) => pos,
+            None => return Ok(Define { name: s.to_owned(), value: None }),
+        };
         
         Ok(Define {
             name: s[..pos].to_owned(),
-            value: s[pos + 1..].parse()?,
+            value: Some(s[pos + 1..].parse()?),
         })
     }
 }
@@ -141,8 +153,8 @@ impl Parameter {
         for ty in self.types.iter() {
             if 
                 (matches!(ty, Ty::Addr) && matches!(token, TokenInner::Address(_))) | 
-                (matches!(ty, Ty::Label) && matches!(token, TokenInner::Ident(Ident::Ident(_)))) | 
-                (matches!(ty, Ty::Reg) && matches!(token, TokenInner::Ident(Ident::Register(_)))) {
+                (matches!(ty, Ty::Label) && matches!(token, TokenInner::Ident(lex::Ident::Ident(_)))) | 
+                (matches!(ty, Ty::Reg) && matches!(token, TokenInner::Ident(lex::Ident::Register(_)))) {
                 return true;
             }
         }
@@ -164,7 +176,7 @@ impl MacroDef {
 
         for token in self.tokens {
             expanded.push(match token.inner {
-                TokenInner::Ident(Ident::MacroVariable(name)) => parameters.get(&name).spanned_expect(token.span, format!("macro variable `{name}` not found in scope")).clone(),
+                TokenInner::Ident(lex::Ident::MacroVariable(name)) => parameters.get(&name).spanned_expect(token.span, format!("macro variable `{name}` not found in scope")).clone(),
                 _ => token,
             })
         }
