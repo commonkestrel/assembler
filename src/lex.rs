@@ -163,11 +163,11 @@ pub enum TokenInner {
 
     #[regex(r#""((\\")|[\x00-\x21\x23-\x7F])*""#, TokenInner::string)]
     #[regex(r##"r#"((\\")|[\x00-\x21\x23-\x7F])*"#"##, TokenInner::raw_string)]
-    String(AsciiStr),
+    String(Box<AsciiStr>),
 
     #[regex(r#"<[^"]*>"#, TokenInner::path)]
     #[regex(r#"<"[^"]*">"#, TokenInner::path_string)]
-    Path(PathBuf),
+    Path(Box<PathBuf>),
 
     #[regex(r"'[\x00-\x7F]*'", TokenInner::char)]
     #[regex(r#"'\\[(\\)n"at0rbfv]'"#, TokenInner::char)]
@@ -180,7 +180,7 @@ pub enum TokenInner {
     #[regex(r"\[0x[0-9a-fA-F][_0-9a-fA-F]*\]", TokenInner::addr_hex)]
     Address(u16),
 
-    #[regex(r"[_a-zA-Z][_a-zA-Z0-9]*", Ident::any)]
+    #[regex(r"[._a-zA-Z][_a-zA-Z0-9]*", Ident::any)]
     #[regex(r"@[_a-zA-Z][_a-zA-Z0-9]*", Ident::pre_proc)]
     #[regex(r"%[_a-zA-Z][_a-zA-Z0-9]*", Ident::macro_variable)]
     #[regex(r"\$[_a-zA-Z][_a-zA-Z0-9]*", Ident::variable)]
@@ -215,7 +215,7 @@ pub enum TokenInner {
     Punctuation(Punctuation),
 
     #[regex(r"///[^\n]*", TokenInner::doc)]
-    Doc(String),
+    Doc(Box<String>),
     
     #[token("\n")]
     NewLine,
@@ -242,7 +242,7 @@ impl TokenInner {
         u64::from_str_radix(&slice.strip_prefix("0x")?, 16).ok()
     }
 
-    fn string(lex: &mut Lexer<TokenInner>) -> Result<AsciiStr, Diagnostic> {
+    fn string(lex: &mut Lexer<TokenInner>) -> Result<Box<AsciiStr>, Diagnostic> {
         let slice = lex
             .slice()
             .strip_prefix("\"")
@@ -250,17 +250,17 @@ impl TokenInner {
             .strip_suffix("\"")
             .ok_or_else(|| Diagnostic::error("string not suffixed with `\"`"))?;
 
-        unescape_str(&slice).map_err(|err| {
+        Ok(Box::new(unescape_str(&slice).map_err(|err| {
             Diagnostic::error(match err {
                 UnescapeError::InvalidAscii(byte) => format!("invalid ASCII character: {byte}"),
                 UnescapeError::UnmatchedBackslash(index) => {
                     format!("unmatched '\\' at string index {index}")
                 }
             })
-        })
+        })?))
     }
 
-    fn raw_string(lex: &mut Lexer<TokenInner>) -> Result<AsciiStr, Diagnostic> {
+    fn raw_string(lex: &mut Lexer<TokenInner>) -> Result<Box<AsciiStr>, Diagnostic> {
         let slice = lex
             .slice()
             .strip_prefix("r#\"")
@@ -268,14 +268,14 @@ impl TokenInner {
             .strip_suffix("#\"")
             .ok_or_else(|| Diagnostic::error("string not suffixed with `\"#`"))?;
 
-        unescape_str(&slice).map_err(|err| {
+        Ok(Box::new(unescape_str(&slice).map_err(|err| {
             Diagnostic::error(match err {
                 UnescapeError::InvalidAscii(byte) => format!("invalid ASCII character: {byte}"),
                 UnescapeError::UnmatchedBackslash(index) => {
                     format!("unmatched `\\` at string index {index}")
                 }
             })
-        })
+        })?))
     }
 
     fn char(lex: &mut Lexer<TokenInner>) -> Result<u8, Diagnostic> {
@@ -300,14 +300,14 @@ impl TokenInner {
         Ok(escaped[0])
     }
 
-    fn path(lex: &mut Lexer<TokenInner>) -> Option<PathBuf> {
+    fn path(lex: &mut Lexer<TokenInner>) -> Option<Box<PathBuf>> {
         let slice = lex.slice().strip_prefix("<")?.strip_suffix(">")?;
-        PathBuf::try_from(slice).ok()
+        Some(Box::new(PathBuf::try_from(slice).ok()?))
     }
 
-    fn path_string(lex: &mut Lexer<TokenInner>) -> Option<PathBuf> {
+    fn path_string(lex: &mut Lexer<TokenInner>) -> Option<Box<PathBuf>> {
         let slice = lex.slice().strip_prefix("<\"")?.strip_suffix("\">")?;
-        PathBuf::try_from(slice).ok()
+        Some(Box::new(PathBuf::try_from(slice).ok()?))
     }
 
     fn addr_bin(lex: &mut Lexer<TokenInner>) -> Result<u16, Diagnostic> {
@@ -382,13 +382,14 @@ impl TokenInner {
         }
     }
 
-    fn doc(lex: &mut Lexer<TokenInner>) -> Result<String, Diagnostic> {
-        Ok(lex
+    fn doc(lex: &mut Lexer<TokenInner>) -> Result<Box<String>, Diagnostic> {
+        Ok(Box::new(lex
             .slice()
             .strip_prefix("///")
             .ok_or_else(|| Diagnostic::error("doc comment does not start with `///`"))?
             .trim()
-            .to_owned())
+            .to_owned()
+        ))
     }
 }
 
@@ -478,6 +479,7 @@ impl FromStr for Register {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum PreProc {
     Variable(Ty),
+    Include,
     Macro,
     Define,
     IfDef,
@@ -501,6 +503,7 @@ impl FromStr for PreProc {
             Ok(PreProc::Variable(ty))
         } else {
             match argument {
+                "include" | "INCLUDE" => Ok(PP::Include),
                 "macro" | "MACRO" => Ok(PP::Macro),
                 "define" | "DEFINE" => Ok(PP::Define),
                 "ifdef" | "IFDEF" => Ok(PP::IfDef),
@@ -527,6 +530,7 @@ pub enum Ty {
     Imm16,
     Imm32,
     Imm64,
+    Str,
 }
 
 impl FromStr for Ty {
@@ -543,6 +547,7 @@ impl FromStr for Ty {
             "imm16" => Ok(Ty::Imm16), 
             "imm32" => Ok(Ty::Imm32),
             "imm64" => Ok(Ty::Imm64),
+            "str" => Ok(Ty::Str),
             _ => Err(())
         }
     }
