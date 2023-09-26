@@ -73,19 +73,19 @@ impl<'a> Iterator for Cursor<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Define {
-    name: String,
-    value: Option<Token>,
+    pub name: String,
+    pub value: TokenStream,
 }
 
 impl Parse for Define {
     fn parse(cursor: &mut Cursor) -> Result<Self, Diagnostic> {
         let _def: Token![@define] = cursor.parse()?;
         let name: Ident = cursor.parse()?;
-        let assignment = cursor.next();
+        let assignment: TokenStream = cursor.parse()?;
 
         Ok(Define {
             name: name.value,
-            value: assignment.map(|tok| tok.to_owned()),
+            value: assignment,
         })
     }
 }
@@ -99,14 +99,25 @@ impl FromStr for Define {
             None => {
                 return Ok(Define {
                     name: s.to_owned(),
-                    value: None,
+                    value: Vec::new(),
                 })
+            }
+        };
+
+        let lexed = lex::lex_string(&s[pos + 1..]);
+        let l = match lexed {
+            Ok(l) => l,
+            Err(errors) => {
+                for err in errors {
+                    err.emit();
+                }
+                Diagnostic::error("Unable to lex define due to previous errors").scream();
             }
         };
 
         Ok(Define {
             name: s[..pos].to_owned(),
-            value: Some(s[pos + 1..].parse()?),
+            value: Cursor::new(&l).parse()?,
         })
     }
 }
