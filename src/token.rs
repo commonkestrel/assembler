@@ -1,5 +1,5 @@
 use crate::ascii::AsciiStr;
-use crate::lex::{self, Delimeter, PreProc, Punctuation, Span};
+use crate::lex::{self, Delimeter, PreProc, Punctuation, Span, TokenStream, Token, TokenInner};
 use crate::parse::{Cursor, Parse};
 use crate::Diagnostic;
 
@@ -157,4 +157,18 @@ parsable! {
     character literal; match Char(ascii) => Char{pub ascii: u8},
     address; match Address(addr) => Address{pub addr: u16},
     doc string; match Doc(md) => Doc{pub md: Box<String>},
+}
+
+impl Parse for TokenStream {
+    fn parse(cursor: &mut Cursor) -> Result<Self, Diagnostic> {
+        let mut stream = Vec::new();
+        for tok in cursor {
+            if let Token { span: _, inner: TokenInner::NewLine } = tok {
+                return Ok(stream);
+            }
+
+            stream.push(tok.clone());
+        }
+        Ok(stream)
+    }
 }
