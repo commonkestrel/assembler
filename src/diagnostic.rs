@@ -152,6 +152,11 @@ impl Diagnostic {
         }
     }
 
+    pub fn with_help<T: Into<String>>(mut self, message: T) -> Self {
+        self.children.push(Child::new(Level::Help, message));
+        self
+    }
+
     pub fn set_span(&mut self, span: Span) {
         self.location = Some(Location::Span(span));
     }
