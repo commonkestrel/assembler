@@ -112,7 +112,7 @@ pub fn lex<P: AsRef<Path>>(path: P) -> LexResult {
     }
 }
 
-fn lex_string<S>(file: S) -> LexResult
+pub fn lex_string<S>(file: S) -> LexResult
 where
     S: Into<String>,
 {
@@ -159,7 +159,8 @@ where
 #[derive(Logos, Clone, Debug, PartialEq)]
 #[logos(error = Diagnostic)]
 #[logos(skip r"(//|;)[^\n]*")]
-#[logos(skip r"[ \n\t\f]")]
+#[logos(skip r"[ \t\f]")]
+#[logos(skip r"\\\n")]
 pub enum TokenInner {
     #[regex(r"0b[01][_01]*", TokenInner::binary)]
     #[regex(r"0o[0-7][_0-7]*", TokenInner::octal)]
@@ -760,13 +761,13 @@ mod tests {
             }
         };
 
-        println!(
-            "{:?}",
-            lexed
-                .into_iter()
-                .map(|tok| tok.inner)
-                .collect::<Vec<TokenInner>>()
-        );
+        // println!(
+        //     "{:?}",
+        //     lexed
+        //         .into_iter()
+        //         .map(|tok| tok.inner)
+        //         .collect::<Vec<TokenInner>>()
+        // );
     }
 
     #[test]
@@ -783,12 +784,12 @@ mod tests {
             }
         };
 
-        println!(
-            "{:?}",
-            lexed
-                .into_iter()
-                .map(|tok| tok.inner)
-                .collect::<Vec<TokenInner>>()
-        )
+        // println!(
+        //     "{:?}",
+        //     lexed
+        //         .into_iter()
+        //         .map(|tok| tok.inner)
+        //         .collect::<Vec<TokenInner>>()
+        // );
     }
 }
