@@ -19,6 +19,8 @@
 //! 3. `+`, `-`, `&`, `|`, `^`, `<<`, `>>`
 //! 
 //! Operators with the same precidence are evaluated left to right.
+//! Identifiers (defines, macros) are treated as if they are
+//! wrapped in a set of parenthases.
 //! 
 //! Floating point arithmetic is not planned.
 
@@ -53,6 +55,9 @@ pub fn eval_expr(tokens: &[Token], defines: &[Define]) -> Result<Token, Diagnost
         }
     };
 
+    #[cfg(test)]
+    println!("{}", Tree::parse(tokens, defines)?);
+
     Tree::parse(tokens, defines).map(|tree| Token{ inner: TokenInner::Immediate(tree.eval()), span })
 }
 
@@ -75,7 +80,7 @@ enum Tree {
 impl Tree {
     fn parse(tokens: &[Token], defines: &[Define]) -> Result<Tree, Diagnostic> {
         let mut iter = tokens.iter().peekable();
-        Tree::parse_f(&mut iter, defines)
+        Tree::parse_e(&mut iter, defines)
     }
 
     /// Parses an expression.
@@ -125,7 +130,7 @@ impl Tree {
             }
         }
 
-        Err(Diagnostic::error("Expected full expression, found `eol`"))
+        Ok(a)
     }
 
     /// Parses a terminal.
@@ -150,7 +155,7 @@ impl Tree {
             }
         }
 
-        Err(Diagnostic::error("Expected full expression, found `eol`"))
+        Ok(a)
     }
 
     /// Parses a factor.
@@ -163,7 +168,7 @@ impl Tree {
                     Ident::Ident(name) => {
                         for def in defines {
                             if def.name == name.as_ref() {
-                                return Ok(Tree::parse(&def.value, defines)?);
+                                return Tree::parse(&def.value, defines);
                             }
                         }
                         Err(Diagnostic::spanned_error(tok.span.clone(), format!("Identifier `{name}` is not defined.")).with_help("Constants must be defined before they are used."))
@@ -267,23 +272,57 @@ mod tests {
         Err(Diagnostic::error("Not an expression"))
     }
 
+    fn test_expr(expr: &str, defines: &[Define]) -> Result<u64, Diagnostic> {
+        let tokens = match crate::lex::lex_string(expr) {
+            Ok(tok) => tok,
+            Err(errors) => {
+                for err in errors {
+                    err.force_emit();
+                }
+                Diagnostic::error(format!("Unable to lex `{expr}` due to previous errors")).scream();
+            }
+        };
+        let expr = &tokens[trim_expr(&tokens)?];
+        let eval = eval_expr(expr, defines)?;
+
+        match eval {
+            Token { span: _, inner: TokenInner::Immediate(result) } => Ok(result),
+            _ => unimplemented!(),
+        }
+    }
+
     #[test]
     fn addition() {
-        let tokens = &crate::lex::lex_string("(3+4+5)")
-            .expect_or_scream("Unable to lex expression `(3+4+5)`");
-        let expr = &tokens[trim_expr(&tokens).unwrap()];
-        let eval = eval_expr(expr, &[]).expect_or_scream("Unable to evaluate expression `(3+4+5)`");
+        let eval = test_expr("(3+4+5)", &[])
+            .expect_or_scream("Unable to evaluate `(3+4+5)`");
 
-        assert_eq!(eval.inner, TokenInner::Immediate(3 + 4 + 5));
+        assert_eq!(eval, 3+4+5);
     }
 
     #[test]
     fn pemdas() {
-        let tokens = &crate::lex::lex_string("(3 * (3 + 4) - 5)")
-            .expect_or_scream("Unable to lex expression `(3 * (3 + 4) - 5)`");
-        let expr = &tokens[trim_expr(&tokens).unwrap()];
-        let eval = eval_expr(expr, &[]).expect_or_scream("Unable to evaluate expression `(3 * (3 + 4) - 5)`");
+        let eval = test_expr("(3 * (3 + 4) - 5)", &[])
+            .expect_or_scream("Unable to evaluate `(3+4+5)`");
 
-        assert_eq!(eval.inner, TokenInner::Immediate(3 * (3 + 4) - 5));
+        assert_eq!(eval, 3*(3+4)-5);
+    }
+
+    #[test]
+    fn define() {
+        let defines = [Define {
+            name: "TEST_DEFINE".to_owned(),
+            value: crate::lex::lex_string("(3+4)").expect_or_scream("Unable to lex `3+4`"),
+        }];
+        let eval = test_expr("(3 * 6 - TEST_DEFINE)", &defines)
+            .expect_or_scream("Unable to evaluate `(3*6 - TEST_DEFINE)`");
+
+        assert_eq!(eval, 3 * 6 - (3 + 4));
+    }
+
+    #[test]
+    #[should_panic]
+    fn no_paren() {
+        let eval = test_expr("3+4+5", &[])
+            .expect_or_scream("Unable to evaluate `(3+4+5)`");
     }
 }
