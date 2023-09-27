@@ -25,7 +25,8 @@ impl FromStr for Token {
     type Err = Diagnostic;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut lex = TokenInner::lexer(s).spanned();
+        let skipped = s.replace("\\\n", "");
+        let mut lex = TokenInner::lexer(&skipped).spanned();
         let (token, span) = lex
             .next()
             .ok_or_else(|| Diagnostic::error("No tokens found in string"))?;
@@ -49,13 +50,28 @@ pub fn lex<P: AsRef<Path>>(path: P) -> LexResult {
     let mut errs: Errors = Vec::new();
     let source = Arc::new(path.as_ref().to_path_buf());
 
+    let mut prev_lines = String::new();
+    let mut multiline = false;
+        
     match File::open(&path) {
         Ok(file) => {
             for (line_num, line) in BufReader::new(file).lines().enumerate() {
                 match line {
                     Ok(line) => {
-                        for (token, span) in TokenInner::lexer(&line).spanned() {
-                            let spanned = span.start..span.end;
+                        // Treat multiple lines with `\` between them as one line
+                        if !multiline {
+                            prev_lines.clear();
+                        }
+                        if line.ends_with('\\') {
+                            prev_lines += &line[..line.len()-1];
+                            multiline = true;
+                            continue;
+                        } else {
+                            multiline = false;
+                        }
+                        
+                        for (token, span) in TokenInner::lexer(&(prev_lines.clone() + &line)).spanned() {
+                            let spanned = span.start+prev_lines.len()..span.end+prev_lines.len();
                             match token {
                                 Ok(tok) => tokens.push(Token {
                                     inner: tok,
@@ -118,12 +134,26 @@ where
 {
     let mut tokens: TokenStream = Vec::new();
     let mut errs: Errors = Vec::new();
-    let mut character = 0;
     let source = Arc::new(file.into());
 
+    let mut prev_lines = String::new();
+    let mut multiline = false;
+
     for (line_num, line) in source.lines().enumerate() {
-        for (token, span) in TokenInner::lexer(&line).spanned() {
-            let spanned = (span.start + character)..(span.end + character);
+        // Treat multiple lines with `\` between them as one line
+        if !multiline {
+            prev_lines.clear();
+        }
+        if line.ends_with('\\') {
+            prev_lines += &line[..line.len()-1];
+            multiline = true;
+            continue;
+        } else {
+            multiline = false;
+        }
+
+        for (token, span) in TokenInner::lexer(&(prev_lines.clone() + &line)).spanned() {
+            let spanned = span.start+prev_lines.len()..span.end+prev_lines.len();
             match token {
                 Ok(tok) => tokens.push(Token {
                     inner: tok,
@@ -133,20 +163,16 @@ where
                         source: Source::String(source.clone()),
                     },
                 }),
-                Err(err) => errs.push(err),
+                Err(mut err) => {
+                    err.set_span(Span {
+                        line: line_num,
+                        range: spanned,
+                        source: Source::String(source.clone()),
+                    });
+                    errs.push(err);
+                }
             }
         }
-        // Add one as well to compensate for the newline.
-        character += line.len() + 1;
-
-        tokens.push(Token {
-            inner: TokenInner::NewLine,
-            span: Span {
-                line: line_num,
-                range: character - 1..character,
-                source: Source::String(source.clone()),
-            },
-        })
     }
 
     if errs.is_empty() {
@@ -160,7 +186,6 @@ where
 #[logos(error = Diagnostic)]
 #[logos(skip r"(//|;)[^\n]*")]
 #[logos(skip r"[ \t\f]")]
-#[logos(skip r"\\\n")]
 pub enum TokenInner {
     #[regex(r"0b[01][_01]*", TokenInner::binary)]
     #[regex(r"0o[0-7][_0-7]*", TokenInner::octal)]
@@ -529,7 +554,6 @@ impl FromStr for PreProc {
 pub enum Ty {
     Any,
     Reg,
-    Hl,
     Addr,
     Label,
     Imm8,
@@ -546,7 +570,6 @@ impl FromStr for Ty {
         match s {
             "any" => Ok(Ty::Any),
             "reg" => Ok(Ty::Reg),
-            "hl" => Ok(Ty::Hl),
             "addr" => Ok(Ty::Addr),
             "label" => Ok(Ty::Label),
             "imm" | "imm8" => Ok(Ty::Imm8),
