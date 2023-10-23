@@ -1,9 +1,8 @@
 use std::fmt;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -52,7 +51,7 @@ pub fn lex<P: AsRef<Path>>(path: P) -> LexResult {
 
     let mut prev_lines = String::new();
     let mut multiline = false;
-        
+
     match File::open(&path) {
         Ok(file) => {
             for (line_num, line) in BufReader::new(file).lines().enumerate() {
@@ -63,15 +62,18 @@ pub fn lex<P: AsRef<Path>>(path: P) -> LexResult {
                             prev_lines.clear();
                         }
                         if line.ends_with('\\') {
-                            prev_lines += &line[..line.len()-1];
+                            prev_lines += &line[..line.len() - 1];
                             multiline = true;
                             continue;
                         } else {
                             multiline = false;
                         }
-                        
-                        for (token, span) in TokenInner::lexer(&(prev_lines.clone() + &line)).spanned() {
-                            let spanned = span.start+prev_lines.len()..span.end+prev_lines.len();
+
+                        for (token, span) in
+                            TokenInner::lexer(&(prev_lines.clone() + &line)).spanned()
+                        {
+                            let spanned =
+                                span.start + prev_lines.len()..span.end + prev_lines.len();
                             match token {
                                 Ok(tok) => tokens.push(Token {
                                     inner: tok,
@@ -145,7 +147,7 @@ where
             prev_lines.clear();
         }
         if line.ends_with('\\') {
-            prev_lines += &line[..line.len()-1];
+            prev_lines += &line[..line.len() - 1];
             multiline = true;
             continue;
         } else {
@@ -153,7 +155,7 @@ where
         }
 
         for (token, span) in TokenInner::lexer(&(prev_lines.clone() + &line)).spanned() {
-            let spanned = span.start+prev_lines.len()..span.end+prev_lines.len();
+            let spanned = span.start + prev_lines.len()..span.end + prev_lines.len();
             match token {
                 Ok(tok) => tokens.push(Token {
                     inner: tok,
@@ -195,11 +197,7 @@ pub enum TokenInner {
 
     #[regex(r#""((\\")|[\x00-\x21\x23-\x7F])*""#, TokenInner::string)]
     #[regex(r##"r#"((\\")|[\x00-\x21\x23-\x7F])*"#"##, TokenInner::raw_string)]
-    String(Box<AsciiStr>),
-
-    #[regex(r#"<[^"]*>"#, TokenInner::path)]
-    #[regex(r#"<"[^"]*">"#, TokenInner::path_string)]
-    Path(Box<PathBuf>),
+    String(AsciiStr),
 
     #[regex(r"'[\x00-\x7F]*'", TokenInner::char)]
     #[regex(r#"'\\[(\\)n"at0rbfv]'"#, TokenInner::char)]
@@ -219,7 +217,12 @@ pub enum TokenInner {
     #[regex(r"()", Ident::punc)]
     Ident(Ident),
 
-    #[regex(r"[\(\)\[\]{}]", TokenInner::delim)]
+    #[token("(", Delimeter::open_paren)]
+    #[token(")", Delimeter::close_paren)]
+    #[token("[", Delimeter::open_bracket)]
+    #[token("]", Delimeter::close_bracket)]
+    #[token("{", Delimeter::open_brace)]
+    #[token("}", Delimeter::close_brace)]
     Delimeter(Delimeter),
 
     #[token("=", Punctuation::eq)]
@@ -247,10 +250,18 @@ pub enum TokenInner {
     Punctuation(Punctuation),
 
     #[regex(r"///[^\n]*", TokenInner::doc)]
-    Doc(Box<String>),
+    Doc(String),
 
     #[token("\n")]
     NewLine,
+}
+
+macro_rules! varient {
+    ($($fn:ident -> $ty:ident::$varient:ident),* $(,)?) => {
+        $(fn $fn(_: &mut Lexer<TokenInner>) -> $ty {
+            $ty::$varient
+        })*
+    };
 }
 
 impl TokenInner {
@@ -274,7 +285,7 @@ impl TokenInner {
         u64::from_str_radix(&slice.strip_prefix("0x")?, 16).ok()
     }
 
-    fn string(lex: &mut Lexer<TokenInner>) -> Result<Box<AsciiStr>, Diagnostic> {
+    fn string(lex: &mut Lexer<TokenInner>) -> Result<AsciiStr, Diagnostic> {
         let slice = lex
             .slice()
             .strip_prefix("\"")
@@ -282,17 +293,17 @@ impl TokenInner {
             .strip_suffix("\"")
             .ok_or_else(|| Diagnostic::error("string not suffixed with `\"`"))?;
 
-        Ok(Box::new(unescape_str(&slice).map_err(|err| {
+        Ok(unescape_str(&slice).map_err(|err| {
             Diagnostic::error(match err {
                 UnescapeError::InvalidAscii(byte) => format!("invalid ASCII character: {byte}"),
                 UnescapeError::UnmatchedBackslash(index) => {
                     format!("unmatched '\\' at string index {index}")
                 }
             })
-        })?))
+        })?)
     }
 
-    fn raw_string(lex: &mut Lexer<TokenInner>) -> Result<Box<AsciiStr>, Diagnostic> {
+    fn raw_string(lex: &mut Lexer<TokenInner>) -> Result<AsciiStr, Diagnostic> {
         let slice = lex
             .slice()
             .strip_prefix("r#\"")
@@ -300,14 +311,14 @@ impl TokenInner {
             .strip_suffix("#\"")
             .ok_or_else(|| Diagnostic::error("string not suffixed with `\"#`"))?;
 
-        Ok(Box::new(unescape_str(&slice).map_err(|err| {
+        Ok(unescape_str(&slice).map_err(|err| {
             Diagnostic::error(match err {
                 UnescapeError::InvalidAscii(byte) => format!("invalid ASCII character: {byte}"),
                 UnescapeError::UnmatchedBackslash(index) => {
                     format!("unmatched `\\` at string index {index}")
                 }
             })
-        })?))
+        })?)
     }
 
     fn char(lex: &mut Lexer<TokenInner>) -> Result<u8, Diagnostic> {
@@ -396,27 +407,13 @@ impl TokenInner {
         })
     }
 
-    fn delim(lex: &mut Lexer<TokenInner>) -> Option<Delimeter> {
-        use Delimeter as D;
-        match lex.slice() {
-            "(" => Some(D::OpenParen),
-            ")" => Some(D::ClosedParen),
-            "[" => Some(D::OpenBracket),
-            "]" => Some(D::ClosedBracket),
-            "{" => Some(D::OpenBrace),
-            "}" => Some(D::ClosedBrace),
-            _ => None,
-        }
-    }
-
-    fn doc(lex: &mut Lexer<TokenInner>) -> Result<Box<String>, Diagnostic> {
-        Ok(Box::new(
-            lex.slice()
-                .strip_prefix("///")
-                .ok_or_else(|| Diagnostic::error("doc comment does not start with `///`"))?
-                .trim()
-                .to_owned(),
-        ))
+    fn doc(lex: &mut Lexer<TokenInner>) -> Result<String, Diagnostic> {
+        Ok(lex
+            .slice()
+            .strip_prefix("///")
+            .ok_or_else(|| Diagnostic::error("doc comment does not start with `///`"))?
+            .trim()
+            .to_owned())
     }
 }
 
@@ -605,6 +602,17 @@ pub enum Delimeter {
     ClosedBrace,
 }
 
+impl Delimeter {
+    varient! {
+        open_paren -> Delimeter::OpenParen,
+        close_paren -> Delimeter::ClosedParen,
+        open_bracket -> Delimeter::OpenBracket,
+        close_bracket -> Delimeter::ClosedBracket,
+        open_brace -> Delimeter::OpenBrace,
+        close_brace -> Delimeter::ClosedBrace,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Punctuation {
     /// `=` (variable assignment)
@@ -649,14 +657,6 @@ pub enum Punctuation {
     Comma,
     /// `:` (label definition)
     Colon,
-}
-
-macro_rules! varient {
-    ($($fn:ident -> $ty:ident::$varient:ident),* $(,)?) => {
-        $(fn $fn(_: &mut Lexer<TokenInner>) -> $ty {
-            $ty::$varient
-        })*
-    };
 }
 
 impl Punctuation {
@@ -814,5 +814,28 @@ mod tests {
         //         .map(|tok| tok.inner)
         //         .collect::<Vec<TokenInner>>()
         // );
+    }
+
+    #[test]
+    fn delim() {
+        let example = "< )".to_owned();
+
+        let lexed = match lex_string(example) {
+            Ok(tokens) => tokens,
+            Err(errors) => {
+                for error in errors {
+                    error.force_emit();
+                }
+                Diagnostic::error("lexing failed due to previous errors").scream();
+            }
+        };
+
+        println!(
+            "{:?}",
+            lexed
+                .into_iter()
+                .map(|tok| tok.inner)
+                .collect::<Vec<TokenInner>>()
+        );
     }
 }
