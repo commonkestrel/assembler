@@ -1,6 +1,6 @@
 //! This is my best effort at implementing a recursive decent parser to
 //! evaluate math expressions at the same time as pre-proc arguments.
-//! 
+//!
 //! This just supports the most important operations for integers:
 //! - Addition (`+`)
 //! - Subtraction (`-`)
@@ -12,25 +12,26 @@
 //! - Bitwise Not (`!` or `~`)
 //! - Logical Shift Left (`<<`)
 //! - Logical Shift Right (`>>`)
-//! 
+//!
 //! Precidence is as follows:
 //! 1. `(...)`, `!`, `~`
 //! 2. `*` and `/`
 //! 3. `+`, `-`, `&`, `|`, `^`, `<<`, `>>`
-//! 
+//!
 //! Operators with the same precidence are evaluated left to right.
 //! Identifiers (defines, macros) are treated as if they are
 //! wrapped in a set of parenthases.
-//! 
+//!
 //! Floating point arithmetic is not planned.
 
 use crate::{
     diagnostic::Diagnostic,
-    lex::{Delimeter, Span, Token, TokenInner, Ident, Punctuation},
+    error,
+    lex::{Delimeter, Ident, Punctuation, Span, Token, TokenInner},
     parse::Define,
 };
-use std::{slice::Iter, fmt};
 use std::iter::Peekable;
+use std::{fmt, slice::Iter};
 
 pub fn eval_expr(tokens: &[Token], defines: &[Define]) -> Result<Token, Diagnostic> {
     let span = match (tokens.first(), tokens.last()) {
@@ -49,7 +50,7 @@ pub fn eval_expr(tokens: &[Token], defines: &[Define]) -> Result<Token, Diagnost
             source: open_span.source.clone(),
         },
         _ => {
-            return Err(Diagnostic::error(
+            return Err(error!(
                 "Expressions must be wrapped in a set of parentheses",
             ))
         }
@@ -58,29 +59,148 @@ pub fn eval_expr(tokens: &[Token], defines: &[Define]) -> Result<Token, Diagnost
     #[cfg(test)]
     println!("{}", Tree::parse(tokens, defines)?);
 
-    Tree::parse(tokens, defines).map(|tree| Token{ inner: TokenInner::Immediate(tree.eval()), span })
+    Tree::parse(tokens, defines).map(|tree| Token {
+        inner: TokenInner::Immediate(tree.eval()),
+        span,
+    })
+}
+
+pub fn eval_no_paren(tokens: &[Token], defines: &[Define]) -> Result<u64, Diagnostic> {
+    let span = match (tokens.first(), tokens.last()) {
+        (
+            Some(Token {
+                inner: _,
+                span: first_span,
+            }),
+            Some(Token {
+                inner: _,
+                span: last_span,
+            }),
+        ) => {}
+        _ => return Err(error!("Expected expression")),
+    };
+
+    #[cfg(test)]
+    println!("{}", Tree::parse(tokens, defines)?);
+
+    Tree::parse(tokens, defines).map(|tree| tree.eval())
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct BinOp {
+    left: Tree,
+    right: Tree,
+}
+
+impl BinOp {
+    #[inline]
+    fn new(left: Tree, right: Tree) -> BinOp {
+        BinOp { left, right }
+    }
+
+    fn boxed(left: Tree, right: Tree) -> Box<BinOp> {
+        Box::new(BinOp::new(left, right))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 enum Tree {
     Literal(u64),
     Define { inner: Box<Tree> },
-    Add { left: Box<Tree>, right: Box<Tree> },
-    Sub { left: Box<Tree>, right: Box<Tree> },
-    Mul { left: Box<Tree>, right: Box<Tree> },
-    Div { left: Box<Tree>, right: Box<Tree> },
-    And { left: Box<Tree>, right: Box<Tree> },
-    Or { left: Box<Tree>, right: Box<Tree> },
-    Xor { left: Box<Tree>, right: Box<Tree> },
-    Shl { left: Box<Tree>, right: Box<Tree> },
-    Shr { left: Box<Tree>, right: Box<Tree> },
+    Add(Box<BinOp>),
+    Sub(Box<BinOp>),
+    Mul(Box<BinOp>),
+    Div(Box<BinOp>),
+    And(Box<BinOp>),
+    Or(Box<BinOp>),
+    Xor(Box<BinOp>),
+    Shl(Box<BinOp>),
+    Shr(Box<BinOp>),
     Not { value: Box<Tree> },
+    Eq(Box<BinOp>),
+    Ne(Box<BinOp>),
+    Lt(Box<BinOp>),
+    Le(Box<BinOp>),
+    Gt(Box<BinOp>),
+    Ge(Box<BinOp>),
+    CmpAnd(Box<BinOp>),
+    CmpOr(Box<BinOp>),
 }
 
 impl Tree {
     fn parse(tokens: &[Token], defines: &[Define]) -> Result<Tree, Diagnostic> {
         let mut iter = tokens.iter().peekable();
-        Tree::parse_e(&mut iter, defines)
+        Tree::parse_c(&mut iter, defines)
+    }
+
+    /// Parses a comparison
+    fn parse_c(tokens: &mut Peekable<Iter<Token>>, defines: &[Define]) -> Result<Tree, Diagnostic> {
+        use TokenInner as TI;
+
+        let mut a = Tree::parse_b(tokens, defines)?;
+
+        while let Some(tok) = tokens.peek() {
+            match tok.inner {
+                TI::Punctuation(Punctuation::AndAnd) => {
+                    tokens.next();
+                    let b = Tree::parse_b(tokens, defines)?;
+                    a = Tree::CmpAnd(BinOp::boxed(a, b));
+                }
+                TI::Punctuation(Punctuation::OrOr) => {
+                    tokens.next();
+                    let b = Tree::parse_b(tokens, defines)?;
+                    a = Tree::CmpOr(BinOp::boxed(a, b));
+                }
+                _ => return Ok(a),
+            }
+        }
+
+        Ok(a)
+    }
+
+    /// Parses a boolean operator
+    fn parse_b(tokens: &mut Peekable<Iter<Token>>, defines: &[Define]) -> Result<Tree, Diagnostic> {
+        use TokenInner as TI;
+
+        let mut a = Tree::parse_e(tokens, defines)?;
+
+        while let Some(tok) = tokens.peek() {
+            match tok.inner {
+                TI::Punctuation(Punctuation::EqEq) => {
+                    tokens.next();
+                    let b = Tree::parse_e(tokens, defines)?;
+                    a = Tree::Eq(BinOp::boxed(a, b));
+                }
+                TI::Punctuation(Punctuation::Ne) => {
+                    tokens.next();
+                    let b = Tree::parse_e(tokens, defines)?;
+                    a = Tree::Ne(BinOp::boxed(a, b));
+                }
+                TI::Punctuation(Punctuation::Lt) => {
+                    tokens.next();
+                    let b = Tree::parse_e(tokens, defines)?;
+                    a = Tree::Lt(BinOp::boxed(a, b));
+                }
+                TI::Punctuation(Punctuation::Le) => {
+                    tokens.next();
+                    let b = Tree::parse_e(tokens, defines)?;
+                    a = Tree::Le(BinOp::boxed(a, b));
+                }
+                TI::Punctuation(Punctuation::Gt) => {
+                    tokens.next();
+                    let b = Tree::parse_e(tokens, defines)?;
+                    a = Tree::Gt(BinOp::boxed(a, b));
+                }
+                TI::Punctuation(Punctuation::Ge) => {
+                    tokens.next();
+                    let b = Tree::parse_e(tokens, defines)?;
+                    a = Tree::Ge(BinOp::boxed(a, b));
+                }
+                _ => return Ok(a),
+            }
+        }
+
+        Ok(a)
     }
 
     /// Parses an expression.
@@ -94,39 +214,39 @@ impl Tree {
                 TI::Punctuation(Punctuation::Plus) => {
                     tokens.next();
                     let b = Tree::parse_t(tokens, defines)?;
-                    a = Tree::Add{ left: Box::new(a), right: Box::new(b) };
-                },
+                    a = Tree::Add(BinOp::boxed(a, b));
+                }
                 TI::Punctuation(Punctuation::Minus) => {
                     tokens.next();
                     let b = Tree::parse_t(tokens, defines)?;
-                    a = Tree::Sub { left: Box::new(a), right: Box::new(b) }
-                },
+                    a = Tree::Sub(BinOp::boxed(a, b));
+                }
                 TI::Punctuation(Punctuation::And) => {
                     tokens.next();
                     let b = Tree::parse_t(tokens, defines)?;
-                    a = Tree::And { left: Box::new(a), right: Box::new(b) }
-                },
+                    a = Tree::And(BinOp::boxed(a, b));
+                }
                 TI::Punctuation(Punctuation::Or) => {
                     tokens.next();
                     let b = Tree::parse_t(tokens, defines)?;
-                    a = Tree::Or { left: Box::new(a), right: Box::new(b) }
-                },
+                    a = Tree::Or(BinOp::boxed(a, b));
+                }
                 TI::Punctuation(Punctuation::Caret) => {
                     tokens.next();
                     let b = Tree::parse_t(tokens, defines)?;
-                    a = Tree::Xor { left: Box::new(a), right: Box::new(b) }
-                },
+                    a = Tree::Xor(BinOp::boxed(a, b));
+                }
                 TI::Punctuation(Punctuation::Shl) => {
                     tokens.next();
                     let b = Tree::parse_t(tokens, defines)?;
-                    a = Tree::Shl { left: Box::new(a), right: Box::new(b) }
-                },
+                    a = Tree::Shl(BinOp::boxed(a, b));
+                }
                 TI::Punctuation(Punctuation::Shr) => {
                     tokens.next();
                     let b = Tree::parse_t(tokens, defines)?;
-                    a = Tree::Shr { left: Box::new(a), right: Box::new(b) }
+                    a = Tree::Shr(BinOp::boxed(a, b));
                 }
-                _ => return Ok(a)
+                _ => return Ok(a),
             }
         }
 
@@ -144,13 +264,13 @@ impl Tree {
                 TI::Punctuation(Punctuation::Star) => {
                     tokens.next();
                     let b = Tree::parse_f(tokens, defines)?;
-                    a = Tree::Mul{ left: Box::new(a), right: Box::new(b) };
-                },
+                    a = Tree::Mul(BinOp::boxed(a, b));
+                }
                 TI::Punctuation(Punctuation::Slash) => {
                     tokens.next();
                     let b = Tree::parse_f(tokens, defines)?;
-                    a = Tree::Div{ left: Box::new(a), right: Box::new(b) };
-                },
+                    a = Tree::Div(BinOp::boxed(a, b));
+                }
                 _ => return Ok(a),
             }
         }
@@ -171,24 +291,36 @@ impl Tree {
                                 return Tree::parse(&def.value, defines);
                             }
                         }
-                        Err(Diagnostic::spanned_error(tok.span.clone(), format!("Identifier `{name}` is not defined.")).with_help("Constants must be defined before they are used."))
-                    },
-                    _ => Err(Diagnostic::spanned_error(tok.span.clone(), "Unexpected identifier"))
+                        Err(Diagnostic::spanned_error(
+                            tok.span.clone(),
+                            format!("Identifier `{name}` is not defined."),
+                        )
+                        .with_help("Constants must be defined before they are used."))
+                    }
+                    _ => Err(Diagnostic::spanned_error(
+                        tok.span.clone(),
+                        "Unexpected identifier",
+                    )),
                 },
                 TI::Delimeter(Delimeter::OpenParen) => {
-                    let a = Tree::parse_e(tokens, defines)?;
+                    let a = Tree::parse_c(tokens, defines)?;
                     if let Some(tok) = tokens.next() {
                         if let TI::Delimeter(Delimeter::ClosedParen) = tok.inner {
                             Ok(a)
                         } else {
-                            Err(Diagnostic::spanned_error(tok.span.clone(), "Expected matching `)` at end of expression"))
+                            Err(Diagnostic::spanned_error(
+                                tok.span.clone(),
+                                "Expected matching `)` at end of expression",
+                            ))
                         }
                     } else {
                         Err(Diagnostic::error("No closing parenthesis for expression"))
                     }
-                },
+                }
                 TI::Punctuation(Punctuation::Not) => {
-                    return Ok(Tree::Not{ value: Box::new(Tree::parse_f(tokens, defines)?) })
+                    return Ok(Tree::Not {
+                        value: Box::new(Tree::parse_f(tokens, defines)?),
+                    })
                 }
                 _ => todo!(),
             },
@@ -200,17 +332,25 @@ impl Tree {
         use Tree as T;
         match self {
             T::Literal(lit) => *lit,
-            T::Define{ inner } => inner.eval(),
-            T::Add{ left, right } => left.eval() + right.eval(),
-            T::Sub{ left, right } => left.eval() - right.eval(),
-            T::Mul{ left, right } => left.eval() * right.eval(),
-            T::Div{ left, right } => left.eval() / right.eval(),
-            T::And{ left, right } => left.eval() & right.eval(),
-            T::Or { left, right } => left.eval() | right.eval(),
-            T::Xor { left, right } => left.eval() ^ right.eval(),
-            T::Shl { left, right } => left.eval() << right.eval(),
-            T::Shr { left, right } => left.eval() >> right.eval(),
-            T::Not{ value } => !value.eval() ,
+            T::Define { inner } => inner.eval(),
+            T::Add(bin) => bin.left.eval() + bin.right.eval(),
+            T::Sub(bin) => bin.left.eval() - bin.right.eval(),
+            T::Mul(bin) => bin.left.eval() * bin.right.eval(),
+            T::Div(bin) => bin.left.eval() / bin.right.eval(),
+            T::And(bin) => bin.left.eval() & bin.right.eval(),
+            T::Or(bin) => bin.left.eval() | bin.right.eval(),
+            T::Xor(bin) => bin.left.eval() ^ bin.right.eval(),
+            T::Shl(bin) => bin.left.eval() << bin.right.eval(),
+            T::Shr(bin) => bin.left.eval() >> bin.right.eval(),
+            T::Not { value } => !value.eval(),
+            T::Eq(bin) => (bin.left.eval() == bin.right.eval()) as u64,
+            T::Ne(bin) => (bin.left.eval() != bin.right.eval()) as u64,
+            T::Lt(bin) => (bin.left.eval() < bin.right.eval()) as u64,
+            T::Le(bin) => (bin.left.eval() <= bin.right.eval()) as u64,
+            T::Gt(bin) => (bin.left.eval() > bin.right.eval()) as u64,
+            T::Ge(bin) => (bin.left.eval() >= bin.right.eval()) as u64,
+            T::CmpAnd(bin) => ((bin.left.eval() > 0) && (bin.right.eval() > 0)) as u64,
+            T::CmpOr(bin) => ((bin.left.eval() > 0) || (bin.right.eval() > 0)) as u64,
         }
     }
 }
@@ -220,17 +360,25 @@ impl fmt::Display for Tree {
         use Tree as T;
         match self {
             T::Literal(inner) => write!(f, "{inner}"),
-            T::Define {inner} => write!(f, "{inner}"),
-            T::Add { left, right } => write!(f, "({left}+{right})"),
-            T::Sub { left, right } => write!(f, "({left}-{right})"),
-            T::Mul { left, right } => write!(f, "({left}*{right})"),
-            T::Div { left, right } => write!(f, "({left}/{right})"),
-            T::And { left, right } => write!(f, "({left}+{right})"),
-            T::Or { left, right } => write!(f, "({left}+{right})"),
-            T::Xor { left, right } => write!(f, "({left}+{right})"),
-            T::Shl { left, right } => write!(f, "({left}+{right})"),
-            T::Shr { left, right } => write!(f, "({left}+{right})"),
+            T::Define { inner } => write!(f, "{inner}"),
+            T::Add(bin) => write!(f, "({}+{})", bin.left, bin.right),
+            T::Sub(bin) => write!(f, "({}-{})", bin.left, bin.right),
+            T::Mul(bin) => write!(f, "({}*{})", bin.left, bin.right),
+            T::Div(bin) => write!(f, "({}/{})", bin.left, bin.right),
+            T::And(bin) => write!(f, "({}+{})", bin.left, bin.right),
+            T::Xor(bin) => write!(f, "({}+{})", bin.left, bin.right),
+            T::Shl(bin) => write!(f, "({}+{})", bin.left, bin.right),
+            T::Shr(bin) => write!(f, "({}+{})", bin.left, bin.right),
+            T::Or(bin) => write!(f, "({}+{})", bin.left, bin.right),
             T::Not { value } => write!(f, "!{value}"),
+            T::Eq(bin) => write!(f, "({}=={})", bin.left, bin.right),
+            T::Ne(bin) => write!(f, "({}!={})", bin.left, bin.right),
+            T::Lt(bin) => write!(f, "({}<{})", bin.left, bin.right),
+            T::Le(bin) => write!(f, "({}<={})", bin.left, bin.right),
+            T::Gt(bin) => write!(f, "({}>{})", bin.left, bin.right),
+            T::Ge(bin) => write!(f, "({}>={})", bin.left, bin.right),
+            T::CmpAnd(bin) => write!(f, "({}&&{})", bin.left, bin.right),
+            T::CmpOr(bin) => write!(f, "({}||{})", bin.left, bin.right),
         }
     }
 }
@@ -279,32 +427,35 @@ mod tests {
                 for err in errors {
                     err.force_emit();
                 }
-                Diagnostic::error(format!("Unable to lex `{expr}` due to previous errors")).scream();
+                Diagnostic::error(format!("Unable to lex `{expr}` due to previous errors"))
+                    .scream();
             }
         };
         let expr = &tokens[trim_expr(&tokens)?];
         let eval = eval_expr(expr, defines)?;
 
         match eval {
-            Token { span: _, inner: TokenInner::Immediate(result) } => Ok(result),
+            Token {
+                span: _,
+                inner: TokenInner::Immediate(result),
+            } => Ok(result),
             _ => unimplemented!(),
         }
     }
 
     #[test]
     fn addition() {
-        let eval = test_expr("(3+4+5)", &[])
-            .expect_or_scream("Unable to evaluate `(3+4+5)`");
+        let eval = test_expr("(3+4+5)", &[]).expect_or_scream("Unable to evaluate `(3+4+5)`");
 
-        assert_eq!(eval, 3+4+5);
+        assert_eq!(eval, 3 + 4 + 5);
     }
 
     #[test]
     fn pemdas() {
-        let eval = test_expr("(3 * (3 + 4) - 5)", &[])
-            .expect_or_scream("Unable to evaluate `(3+4+5)`");
+        let eval =
+            test_expr("(3 * (3 + 4) - 5)", &[]).expect_or_scream("Unable to evaluate `(3+4+5)`");
 
-        assert_eq!(eval, 3*(3+4)-5);
+        assert_eq!(eval, 3 * (3 + 4) - 5);
     }
 
     #[test]
@@ -320,9 +471,28 @@ mod tests {
     }
 
     #[test]
+    fn cmp_true() {
+        let eval = match test_expr("(3*16 <= 4*16 && 3+3 == 2+4)", &[]) {
+            Ok(e) => e,
+            Err(err) => err.scream(),
+        };
+
+        assert_eq!(eval > 0, 3 * 16 <= 4 * 16 && 3 + 3 == 2 + 4)
+    }
+
+    #[test]
+    fn cmp_false() {
+        let eval = match test_expr("(3*16 <= 4*16 && 3+3 != 2+4)", &[]) {
+            Ok(e) => e,
+            Err(err) => err.scream(),
+        };
+
+        assert_eq!(eval > 0, 3 * 16 <= 4 * 16 && 3 + 3 != 2 + 4)
+    }
+
+    #[test]
     #[should_panic]
     fn no_paren() {
-        let eval = test_expr("3+4+5", &[])
-            .expect_or_scream("Unable to evaluate `(3+4+5)`");
+        let eval = test_expr("3+4+5", &[]).expect_or_scream("Unable to evaluate `(3+4+5)`");
     }
 }
