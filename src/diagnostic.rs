@@ -337,6 +337,44 @@ impl Default for Diagnostic {
     }
 }
 
+#[macro_export]
+macro_rules! error {
+    ($($arg:tt)*) => ($crate::diagnostic::Diagnostic::error(::std::format!($($arg)*)))
+}
+
+#[macro_export]
+macro_rules! spanned_error {
+    ($span:expr, $($arg:tt)*) => ($crate::diagnostic::Diagnostic::spanned_error($span, ::std::format!($($arg)*)))
+}
+
+#[macro_export]
+macro_rules! warn {
+    ($($arg:tt)*) => ($crate::diagnostic::Diagnostic::warn(::std::format!($($arg)*)))
+}
+
+#[macro_export]
+macro_rules! spanned_warn {
+    ($span:expr, $($arg:tt)*) => ($crate::diagnostic::Diagnostic::spanned_warn($span, ::std::format!($($arg)*)))
+}
+#[macro_export]
+macro_rules! info {
+    ($($arg:tt)*) => ($crate::diagnostic::Diagnostic::info(::std::format!($($arg)*)))
+}
+
+#[macro_export]
+macro_rules! spanned_info {
+    ($span:expr, $($arg:tt)*) => ($crate::diagnostic::Diagnostic::spanned_info($span, ::std::format!($($arg)*)))
+}
+#[macro_export]
+macro_rules! debug {
+    ($($arg:tt)*) => ($crate::diagnostic::Diagnostic::debug(::std::format!($($arg)*)))
+}
+
+#[macro_export]
+macro_rules! spanned_debug {
+    ($span:expr, $($arg:tt)*) => ($crate::diagnostic::Diagnostic::spanned_debug($span, ::std::format!($($arg)*)))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct Child {
     level: Level,
