@@ -17,17 +17,69 @@
 //!
 //! Recursivly expands macros, leaving the token tree with just instructions.
 
+use bitflags::bitflags;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::diagnostic::{Diagnostic, OptionalScream};
-use crate::lex::{self, Register, Span, Token, TokenInner, TokenStream, Ty};
+use crate::diagnostic::Diagnostic;
+use crate::lex::{self, PreProc, Register, Span, Token, TokenInner, TokenStream, Ty};
 use crate::token::Ident;
 use crate::Errors;
-use crate::Token;
+use crate::{error, spanned_error, spanned_warn, warn, Token};
 
 pub fn parse(stream: TokenStream) -> Result<(), Errors> {
-    Err(vec![Diagnostic::error("Parsing not yet implemented")])
+    let proc_stream = pre_proc(&stream)?;
+
+    Err(vec![error!("Parsing not yet implemented")])
+}
+
+macro_rules! match_errors {
+    ($ok:ident, $errors:ident, $ex:expr) => {
+        match $ex {
+            Ok(ok) => $ok.push(ok),
+            Err(err) => $errors.push(err),
+        }
+    };
+    ($errors:ident, $ex:expr) => {
+        match $ex {
+            Ok(ok) => ok,
+            Err(err) => $errors.push(err),
+        }
+    };
+}
+
+struct ProcStream {
+    stream: TokenStream,
+    org: Option<u64>
+}
+
+fn pre_proc(stream: &[Token]) -> Result<ProcStream, Errors> {
+    use TokenInner as TI;
+
+    let mut cursor = Cursor::new(stream);
+
+    let mut out = Vec::new();
+    let mut defines: Vec<Define> = Vec::new();
+    let mut errors = Vec::new();
+    let mut org = None;
+
+    while let Some(tok) = cursor.peek() {
+        match tok.inner {
+            TI::Ident(lex::Ident::PreProc(PreProc::Define)) => {
+                match_errors!(defines, errors, cursor.parse());
+            }
+            TI::Ident(lex::Ident::PreProc(PreProc::If)) => {
+                cursor.step();
+            }
+            _ => cursor.step(),
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(ProcStream{ stream: out, org })
+    } else {
+        Err(errors)
+    }
 }
 
 pub trait Parse: Sized {
@@ -56,6 +108,10 @@ impl<'a> Cursor<'a> {
 
     pub fn peek(&self) -> Option<&'a Token> {
         self.buffer.get(self.position)
+    }
+
+    pub fn step(&mut self) {
+        self.position += 1;
     }
 }
 
@@ -111,7 +167,7 @@ impl FromStr for Define {
                 for err in errors {
                     err.emit();
                 }
-                Diagnostic::error("Unable to lex define due to previous errors").scream();
+                error!("Unable to lex define due to previous errors").scream();
             }
         };
 
@@ -157,25 +213,43 @@ pub enum Address {
 
 pub struct Variable {}
 
+bitflags! {
+    #[repr(transparent)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct Types: u8 {
+        const REG = 0b0000_0001;
+        const ADDR = 0b0000_0010;
+        const LABEL = 0b0000_0100;
+        const STR = 0b0000_1000;
+        const IMM8 = 0b0001_0000;
+        const IMM16 = 0b0011_0000;
+        const IMM32 = 0b0111_0000;
+        const IMM64 = 0b1111_0000;
+    }
+}
+
 pub struct Parameter {
-    types: Vec<Ty>,
+    types: Types,
     name: String,
 }
 
 impl Parameter {
-    fn fits(&self, token: &TokenInner) -> bool {
-        for ty in self.types.iter() {
-            if (matches!(ty, Ty::Addr) && matches!(token, TokenInner::Address(_)))
-                | (matches!(ty, Ty::Label)
-                    && matches!(token, TokenInner::Ident(lex::Ident::Ident(_))))
-                | (matches!(ty, Ty::Reg)
-                    && matches!(token, TokenInner::Ident(lex::Ident::Register(_))))
-            {
-                return true;
-            }
+    fn fits(&self, token: &Token) -> bool {
+        use TokenInner as TI;
+        match token.inner {
+            TI::String(_) => self.types.contains(Types::STR),
+            TI::Immediate(imm) => match imm.checked_ilog2() {
+                None | Some(0..=7) => self.types.contains(Types::IMM8),
+                Some(8..=15) => self.types.contains(Types::IMM16),
+                Some(16..=31) => self.types.contains(Types::IMM32),
+                Some(32..=63) => self.types.contains(Types::IMM64),
+                _ => unreachable!(),
+            },
+            TI::Address(_) => self.types.contains(Types::ADDR),
+            TI::Ident(lex::Ident::Register(_)) => self.types.contains(Types::REG),
+            TI::Ident(_) => self.types.contains(Types::LABEL),
+            _ => false,
         }
-
-        false
     }
 }
 
@@ -185,35 +259,57 @@ pub struct MacroDef {
 }
 
 impl MacroDef {
-    pub fn expand(self, parameters: Vec<Token>) -> TokenStream {
+    pub fn fits(&self, tokens: &[Token]) -> bool {
+        if self.parameters.len() != tokens.len() {
+            return false;
+        }
+
+        self.parameters
+            .iter()
+            .zip(tokens)
+            .all(|(param, token)| param.fits(token))
+    }
+
+    /// Must make sure that the provided parameters match this rule with [`MacroDef::fits`]
+    pub fn expand(&self, parameters: &[Token]) -> Result<TokenStream, Diagnostic> {
         let mut expanded = TokenStream::with_capacity(self.tokens.len());
 
-        let parameters: HashMap<String, Token> = HashMap::from_iter(
+        let parameters: HashMap<String, &Token> = HashMap::from_iter(
             self.parameters
                 .iter()
                 .map(|p| p.name.to_owned())
                 .zip(parameters.into_iter()),
         );
 
-        for token in self.tokens {
-            expanded.push(match token.inner {
-                TokenInner::Ident(lex::Ident::MacroVariable(name)) => parameters
-                    .get(&name)
-                    .spanned_expect(
-                        token.span,
-                        format!("macro variable `{name}` not found in scope"),
-                    )
-                    .clone(),
-                _ => token,
+        for token in self.tokens.iter() {
+            expanded.push(match &token.inner {
+                TokenInner::Ident(lex::Ident::MacroVariable(name)) => {
+                    (*parameters.get(name).ok_or(spanned_error!(
+                        token.span.clone(),
+                        "macro variable `{name}` not found in scope",
+                    ))?)
+                    .clone()
+                }
+                _ => token.clone(),
             })
         }
 
-        expanded
+        Ok(expanded)
     }
 }
 
 pub struct Macro {
+    name: String,
     definitions: Vec<MacroDef>,
 }
 
-impl Macro {}
+impl Macro {
+    fn expand(self, span: Span, parameters: Vec<Token>) -> Result<TokenStream, Diagnostic> {
+        let rule = self
+            .definitions
+            .iter()
+            .find(|def| def.fits(&parameters))
+            .ok_or_else(|| spanned_error!(span, "no rules matched "))?;
+        rule.expand(&parameters)
+    }
+}
