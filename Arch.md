@@ -10,9 +10,9 @@ This file details the (possible) architecture for this CPU.
 0x4: `NAND reg, imm8/reg` => reg = reg & imm8/reg
 0x5: `OR reg, imm8/reg`   => reg = reg | imm8/reg
 0x6: `CMP reg, imm8/reg`  => S = reg vs. imm8/reg (See [Status](#status))
-0x7: `MW reg, imm8/reg`   => reg = imm8/reg
-0x8: `LW reg, [HL/imm16]` => reg = [HL/imm16] 
-0x9: `SW reg, [HL/imm16]` => [HL/imm16] = reg
+0x7: `MV reg, imm8/reg`   => reg = imm8/reg
+0x8: `LD reg, [HL/imm16]` => reg = [HL/imm16] 
+0x9: `ST reg, [HL/imm16]` => [HL/imm16] = reg
 0xA: `LDA imm16`          => HL = imm16
 0xB: `PUSH reg/imm8`      => [++SP] = reg/imm8
 0xC: `POP reg`            => reg = [SP--]
