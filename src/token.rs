@@ -143,7 +143,7 @@ parsable! {
 /* Identifiers */
 
 parsable! {
-    register; match Ident(lex::Ident::Register(reg)) => Register{pub reg: lex::Register},
+    register; match Ident(lex::Ident::Register(inner)) => Register{pub inner: lex::Register},
     identifier; match Ident(lex::Ident::Ident(value)) => Ident{pub value: String},
     instruction; match Ident(lex::Ident::Instruction(instruction)) => Instruction{pub instruction: lex::Instruction},
     type; match Ident(lex::Ident::Ty(ty)) => Ty{pub ty: lex::Ty},
