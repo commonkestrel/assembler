@@ -4,6 +4,7 @@ mod eval;
 mod lex;
 mod parse;
 mod token;
+mod asm;
 
 pub(crate) use diagnostic::{Diagnostic, OptionalScream, ResultScream};
 
@@ -26,8 +27,11 @@ struct Args {
     #[arg(short = 'D')]
     defines: Vec<Define>,
 
-    #[arg(long, alias = "input")]
+    #[arg(short = 'i', long, alias = "input")]
     file: PathBuf,
+
+    #[arg(short, long, alias = "out", default_value = "out.obj")]
+    output: PathBuf,
 }
 
 pub static VERBOSITY: OnceLock<Verbosity> = OnceLock::new();
@@ -73,7 +77,27 @@ fn main() {
         }
     };
 
-    println!("{}", std::mem::size_of_val(&*lexed));
+    let parsed = match parse::parse(lexed) {
+        Ok(stream) => stream,
+        Err(errors) => {
+            for err in errors {
+                err.emit();
+            }
+            Diagnostic::error("parsing failed due to previous errors").scream();
+        }
+    };
+
+    let assembled = match asm::assemble(parsed) {
+        Ok(out) => out,
+        Err(errors) => {
+            for err in errors {
+                err.emit();
+            }
+            Diagnostic::error("assembly failed due to previous errors").scream();
+        }
+    };
+
+
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
