@@ -13,16 +13,37 @@
 //! - Logical Shift Left (`<<`)
 //! - Logical Shift Right (`>>`)
 //!
+//! It also supports boolean opperations (treating 0 as `false` and anything greater than 0 as `true`):
+//! - Equality (`==`)
+//! - Inequality (`!=`)
+//! - Less than (`<`)
+//! - Less than or equal to (`<=`)
+//! - Greater than (`>`)
+//! - Greater than or equal to (`>=`)
+//! - Logical And (`&&`)
+//! - Logical Or (`||`)
+//!
 //! Precidence is as follows:
 //! 1. `(...)`, `!`, `~`
 //! 2. `*` and `/`
 //! 3. `+`, `-`, `&`, `|`, `^`, `<<`, `>>`
+//! 4. `==`, `!=`, `<`, `<=`, `>`, `>=`
+//! 5. `&&`, `||`
 //!
 //! Operators with the same precidence are evaluated left to right.
-//! Identifiers (defines, macros) are treated as if they are
+//! Defines are treated as if they are
 //! wrapped in a set of parenthases.
 //!
+//! Macros are not allowed in expressions.
+//!
 //! Floating point arithmetic is not planned.
+//!
+//! # Examples
+//! ```
+//! let expr = lex_string("12*3 == 6*6").unwrap();
+//! let eval = eval_no_paren(&expr);
+//! assert_eq!(eval > 0, 12*3 == 6*6);
+//! ```
 
 use crate::{
     diagnostic::Diagnostic,
@@ -66,20 +87,6 @@ pub fn eval_expr(tokens: &[Token], defines: &[Define]) -> Result<Token, Diagnost
 }
 
 pub fn eval_no_paren(tokens: &[Token], defines: &[Define]) -> Result<u64, Diagnostic> {
-    let span = match (tokens.first(), tokens.last()) {
-        (
-            Some(Token {
-                inner: _,
-                span: first_span,
-            }),
-            Some(Token {
-                inner: _,
-                span: last_span,
-            }),
-        ) => {}
-        _ => return Err(error!("Expected expression")),
-    };
-
     #[cfg(test)]
     println!("{}", Tree::parse(tokens, defines)?);
 
@@ -431,6 +438,7 @@ mod tests {
                     .scream();
             }
         };
+        
         let expr = &tokens[trim_expr(&tokens)?];
         let eval = eval_expr(expr, defines)?;
 
@@ -494,5 +502,15 @@ mod tests {
     #[should_panic]
     fn no_paren() {
         let eval = test_expr("3+4+5", &[]).expect_or_scream("Unable to evaluate `(3+4+5)`");
+    }
+
+    #[test]
+    fn bitshift() {
+        let eval = match test_expr("((1<<3) | (1<<5))", &[]) {
+            Ok(ok) => ok,
+            Err(err) => err.scream(),
+        };
+
+        assert_eq!(eval, (1<<3) | (1<<5));  
     }
 }
