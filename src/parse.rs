@@ -7,7 +7,7 @@
 //! ## Preprocessor Expansion
 //!
 //! Preproc expansion includes the obvious things, like @define, @paste, etc.,
-//! but also expressions (`(1 << 2) & (1 << 5)`), and macros.
+//! but also expressions (`(1 << 2) | (1 << 5)`).
 //!
 //! ## Instruction Parsing
 //!
@@ -20,17 +20,33 @@
 use bitflags::bitflags;
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::mem;
 
 use crate::diagnostic::Diagnostic;
 use crate::lex::{self, PreProc, Register, Span, Token, TokenInner, TokenStream, Ty};
 use crate::token::Ident;
 use crate::Errors;
-use crate::{error, spanned_error, spanned_warn, warn, Token};
+use crate::{error, spanned_error, spanned_warn, warn, Token, };
 
-pub fn parse(stream: TokenStream) -> Result<(), Errors> {
-    let proc_stream = pre_proc(&stream)?;
+pub fn parse(stream: TokenStream) -> Result<ParseStream, Errors> {
+    let proc_stream = pre_proc(stream)?;
 
     Err(vec![error!("Parsing not yet implemented")])
+}
+
+pub struct ParseStream {
+    pub org: Option<u16>,
+    pub stream: Vec<ILToken>,
+}
+
+pub struct ILToken {
+    pub span: Span,
+    pub inner: ILInner,
+}
+
+pub enum ILInner {
+    Instruction(Instruction),
+    Label(String),
 }
 
 macro_rules! match_errors {
@@ -48,15 +64,26 @@ macro_rules! match_errors {
     };
 }
 
-struct ProcStream {
-    stream: TokenStream,
-    org: Option<u64>
+struct PostProc {
+    stream: ProcStream,
+    org: Option<u16>
 }
 
-fn pre_proc(stream: &[Token]) -> Result<ProcStream, Errors> {
+type ProcStream = Vec<ProcToken>;
+
+struct ProcToken {
+    span: Span,
+    inner: ProcTokenInner,
+}
+
+enum ProcTokenInner {
+
+}
+
+fn pre_proc(mut stream: TokenStream) -> Result<PostProc, Errors> {
     use TokenInner as TI;
 
-    let mut cursor = Cursor::new(stream);
+    let mut cursor = Cursor::new(&stream);
 
     let mut out = Vec::new();
     let mut defines: Vec<Define> = Vec::new();
@@ -69,17 +96,27 @@ fn pre_proc(stream: &[Token]) -> Result<ProcStream, Errors> {
                 match_errors!(defines, errors, cursor.parse());
             }
             TI::Ident(lex::Ident::PreProc(PreProc::If)) => {
-                cursor.step();
-            }
+                let position = cursor.position;
+                mem::drop(cursor);
+                eval_if(&mut stream, &defines);
+                cursor = Cursor {
+                    buffer: &stream,
+                    position,
+                };
+            },
             _ => cursor.step(),
         }
     }
 
     if errors.is_empty() {
-        Ok(ProcStream{ stream: out, org })
+        Ok(PostProc{ stream: out, org })
     } else {
         Err(errors)
     }
+}
+
+fn eval_if(stream: &mut TokenStream, defines: &[Define]) {
+
 }
 
 pub trait Parse: Sized {
@@ -180,8 +217,8 @@ impl FromStr for Define {
 
 pub enum Expanded {
     Instruction(Instruction),
-    Label(Ident),
-    SubLabel(Ident),
+    Label(String),
+    SubLabel(String),
     Variable(Variable),
 }
 
@@ -190,15 +227,45 @@ pub enum Instruction {
     Adc(Register, RegImm),
     Sub(Register, RegImm),
     Sbc(Register, RegImm),
-    And(Register, RegImm),
+    Nand(Register, RegImm),
     Or(Register, RegImm),
-    Xor(Register, RegImm),
+    Cmp(Register, RegImm),
     Mv(Register, RegImm),
-    Ld(Register),
-    St(Register),
+    Ld(Register, Option<u16>),
+    St(Register, Option<u16>),
+    Lda(u16),
     Push(RegImm),
     Pop(Register),
     Jnz(Address),
+    In(Register, RegImm),
+    Out(RegImm, Register),
+}
+
+impl Instruction {
+    pub fn len(&self) -> u16 {
+        use Instruction as I;
+
+        match self {
+            I::Add(_, _) => 2,
+            I::Adc(_, _) => 2,
+            I::Sub(_, _) => 2,
+            I::Sbc(_, _) => 2,
+            I::Nand(_, _) => 2,
+            I::Or(_, _) => 2,
+            I::Cmp(_, _) => 2,
+            I::Mv(_, _) => 2,
+            I::Ld(_, Some(_)) => 3,
+            I::Ld(_, None) => 1,
+            I::St(_, Some(_)) => 3,
+            I::St(_, None) => 1,
+            I::Lda(_) => 3,
+            I::Push(_) => 2,
+            I::Pop(_) => 1,
+            I::Jnz(_) => 3,
+            I::In(_, _) => 2,
+            I::Out(_, _) => 2,
+        }
+    }
 }
 
 pub enum RegImm {
@@ -208,10 +275,18 @@ pub enum RegImm {
 
 pub enum Address {
     Literal(u16),
-    Label(String),
+    Label(Label),
 }
 
-pub struct Variable {}
+pub struct Label {
+    pub span: Span,
+    pub name: String,
+}
+
+pub struct Variable {
+    span: Span,
+    
+}
 
 bitflags! {
     #[repr(transparent)]
