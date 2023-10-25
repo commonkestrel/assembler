@@ -1,10 +1,10 @@
 mod ascii;
+mod asm;
 mod diagnostic;
 mod eval;
 mod lex;
 mod parse;
 mod token;
-mod asm;
 
 pub(crate) use diagnostic::{Diagnostic, OptionalScream, ResultScream};
 
@@ -96,8 +96,6 @@ fn main() {
             Diagnostic::error("assembly failed due to previous errors").scream();
         }
     };
-
-
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
