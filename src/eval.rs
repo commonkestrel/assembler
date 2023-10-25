@@ -86,7 +86,7 @@ pub fn eval_expr(tokens: &[Token], defines: &[Define]) -> Result<Token, Diagnost
     })
 }
 
-pub fn eval_no_paren(tokens: &[Token], defines: &[Define]) -> Result<u64, Diagnostic> {
+pub fn eval_no_paren(tokens: &[Token], defines: &[Define]) -> Result<i128, Diagnostic> {
     #[cfg(test)]
     println!("{}", Tree::parse(tokens, defines)?);
 
@@ -112,7 +112,7 @@ impl BinOp {
 
 #[derive(Debug, Clone, PartialEq)]
 enum Tree {
-    Literal(u64),
+    Literal(i128),
     Define { inner: Box<Tree> },
     Add(Box<BinOp>),
     Sub(Box<BinOp>),
@@ -335,7 +335,7 @@ impl Tree {
         }
     }
 
-    fn eval(&self) -> u64 {
+    fn eval(&self) -> i128 {
         use Tree as T;
         match self {
             T::Literal(lit) => *lit,
@@ -350,14 +350,14 @@ impl Tree {
             T::Shl(bin) => bin.left.eval() << bin.right.eval(),
             T::Shr(bin) => bin.left.eval() >> bin.right.eval(),
             T::Not { value } => !value.eval(),
-            T::Eq(bin) => (bin.left.eval() == bin.right.eval()) as u64,
-            T::Ne(bin) => (bin.left.eval() != bin.right.eval()) as u64,
-            T::Lt(bin) => (bin.left.eval() < bin.right.eval()) as u64,
-            T::Le(bin) => (bin.left.eval() <= bin.right.eval()) as u64,
-            T::Gt(bin) => (bin.left.eval() > bin.right.eval()) as u64,
-            T::Ge(bin) => (bin.left.eval() >= bin.right.eval()) as u64,
-            T::CmpAnd(bin) => ((bin.left.eval() > 0) && (bin.right.eval() > 0)) as u64,
-            T::CmpOr(bin) => ((bin.left.eval() > 0) || (bin.right.eval() > 0)) as u64,
+            T::Eq(bin) => (bin.left.eval() == bin.right.eval()) as i128,
+            T::Ne(bin) => (bin.left.eval() != bin.right.eval()) as i128,
+            T::Lt(bin) => (bin.left.eval() < bin.right.eval()) as i128,
+            T::Le(bin) => (bin.left.eval() <= bin.right.eval()) as i128,
+            T::Gt(bin) => (bin.left.eval() > bin.right.eval()) as i128,
+            T::Ge(bin) => (bin.left.eval() >= bin.right.eval()) as i128,
+            T::CmpAnd(bin) => ((bin.left.eval() > 0) && (bin.right.eval() > 0)) as i128,
+            T::CmpOr(bin) => ((bin.left.eval() > 0) || (bin.right.eval() > 0)) as i128,
         }
     }
 }
@@ -427,7 +427,7 @@ mod tests {
         Err(Diagnostic::error("Not an expression"))
     }
 
-    fn test_expr(expr: &str, defines: &[Define]) -> Result<u64, Diagnostic> {
+    fn test_expr(expr: &str, defines: &[Define]) -> Result<i128, Diagnostic> {
         let tokens = match crate::lex::lex_string(expr) {
             Ok(tok) => tok,
             Err(errors) => {
@@ -438,7 +438,7 @@ mod tests {
                     .scream();
             }
         };
-        
+
         let expr = &tokens[trim_expr(&tokens)?];
         let eval = eval_expr(expr, defines)?;
 
@@ -511,6 +511,6 @@ mod tests {
             Err(err) => err.scream(),
         };
 
-        assert_eq!(eval, (1<<3) | (1<<5));  
+        assert_eq!(eval, (1 << 3) | (1 << 5));
     }
 }

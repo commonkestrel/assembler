@@ -1,6 +1,7 @@
 use std::fmt;
 use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind, Read};
+use std::mem;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -191,9 +192,9 @@ where
 pub enum TokenInner {
     #[regex(r"0b[01][_01]*", TokenInner::binary)]
     #[regex(r"0o[0-7][_0-7]*", TokenInner::octal)]
-    #[regex(r"[1-9][_0-9]*", TokenInner::decimal)]
+    #[regex(r"-?[1-9][_0-9]*", TokenInner::decimal)]
     #[regex(r"0x[0-9a-fA-F][_0-9a-fA-F]*", TokenInner::hexadecimal)]
-    Immediate(u64),
+    Immediate(i128),
 
     #[regex(r#""((\\")|[\x00-\x21\x23-\x7F])*""#, TokenInner::string)]
     #[regex(r##"r#"((\\")|[\x00-\x21\x23-\x7F])*"#"##, TokenInner::raw_string)]
@@ -265,24 +266,24 @@ macro_rules! varient {
 }
 
 impl TokenInner {
-    fn binary(lex: &mut Lexer<TokenInner>) -> Option<u64> {
+    fn binary(lex: &mut Lexer<TokenInner>) -> Option<i128> {
         let slice = lex.slice().replace("_", "");
-        u64::from_str_radix(&slice.strip_prefix("0b")?, 2).ok()
+        i128::from_str_radix(&slice.strip_prefix("0b")?, 2).ok()
     }
 
-    fn octal(lex: &mut Lexer<TokenInner>) -> Option<u64> {
+    fn octal(lex: &mut Lexer<TokenInner>) -> Option<i128> {
         let slice = lex.slice().replace("_", "");
-        u64::from_str_radix(&slice.strip_prefix("0o")?, 8).ok()
+        i128::from_str_radix(&slice.strip_prefix("0o")?, 8).ok()
     }
 
-    fn decimal(lex: &mut Lexer<TokenInner>) -> Option<u64> {
+    fn decimal(lex: &mut Lexer<TokenInner>) -> Option<i128> {
         let slice = lex.slice().replace("_", "");
-        u64::from_str_radix(&slice, 10).ok()
+        i128::from_str_radix(&slice, 10).ok()
     }
 
-    fn hexadecimal(lex: &mut Lexer<TokenInner>) -> Option<u64> {
+    fn hexadecimal(lex: &mut Lexer<TokenInner>) -> Option<i128> {
         let slice = lex.slice().replace("_", "");
-        u64::from_str_radix(&slice.strip_prefix("0x")?, 16).ok()
+        i128::from_str_radix(&slice.strip_prefix("0x")?, 16).ok()
     }
 
     fn string(lex: &mut Lexer<TokenInner>) -> Result<AsciiStr, Diagnostic> {
@@ -456,6 +457,8 @@ impl Ident {
             Ident::Register(register)
         } else if let Ok(instruction) = Instruction::from_str(slice) {
             Ident::Instruction(instruction)
+        } else if let Ok(ty) = Ty::from_str(slice) {
+            Ident::Ty(ty)
         } else {
             Ident::Ident(slice.to_owned())
         }

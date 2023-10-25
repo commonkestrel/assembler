@@ -20,13 +20,14 @@
 use bitflags::bitflags;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::mem;
 
+use crate::ascii::AsciiStr;
 use crate::diagnostic::Diagnostic;
-use crate::lex::{self, PreProc, Register, Span, Token, TokenInner, TokenStream, Ty};
-use crate::token::Ident;
+use crate::eval;
+use crate::lex::{self, PreProc, Punctuation, Register, Span, Token, TokenInner, TokenStream, Ty};
+use crate::token::{Ident, If};
 use crate::Errors;
-use crate::{error, spanned_error, spanned_warn, warn, Token, };
+use crate::{error, spanned_error, spanned_warn, warn, Token};
 
 pub fn parse(stream: TokenStream) -> Result<ParseStream, Errors> {
     let proc_stream = pre_proc(stream)?;
@@ -66,7 +67,7 @@ macro_rules! match_errors {
 
 struct PostProc {
     stream: ProcStream,
-    org: Option<u16>
+    org: Option<u16>,
 }
 
 type ProcStream = Vec<ProcToken>;
@@ -76,14 +77,44 @@ struct ProcToken {
     inner: ProcTokenInner,
 }
 
-enum ProcTokenInner {
+impl TryFrom<Token> for ProcToken {
+    type Error = Diagnostic;
 
+    fn try_from(token: Token) -> Result<Self, Self::Error> {
+        use ProcTokenInner as PTI;
+        use TokenInner as TI;
+        let inner = match token.inner {
+            TI::Ident(lex::Ident::Instruction(inst)) => PTI::Instruction(inst),
+            _ => return Err(
+                spanned_error!(
+                    token.span,
+                    "unexpected artifact in preproc token stream conversion"
+                )
+                .with_help("This is a bug. Please report it at https://github.com/commonkestrel/assembler/issues")
+            ),
+        };
+
+        Ok(ProcToken {
+            span: token.span,
+            inner,
+        })
+    }
+}
+
+enum ProcTokenInner {
+    Literal(i128),
+    Address(u16),
+    String(AsciiStr),
+    Char(u8),
+    Punctuation(Punctuation),
+    NewLine,
+    Instruction(lex::Instruction),
 }
 
 fn pre_proc(mut stream: TokenStream) -> Result<PostProc, Errors> {
     use TokenInner as TI;
 
-    let mut cursor = Cursor::new(&stream);
+    let mut cursor = Cursor::new(&mut stream);
 
     let mut out = Vec::new();
     let mut defines: Vec<Define> = Vec::new();
@@ -96,27 +127,64 @@ fn pre_proc(mut stream: TokenStream) -> Result<PostProc, Errors> {
                 match_errors!(defines, errors, cursor.parse());
             }
             TI::Ident(lex::Ident::PreProc(PreProc::If)) => {
-                let position = cursor.position;
-                mem::drop(cursor);
-                eval_if(&mut stream, &defines);
-                cursor = Cursor {
-                    buffer: &stream,
-                    position,
-                };
-            },
-            _ => cursor.step(),
+                if let Err(err) = eval_if(&mut cursor, &defines) {
+                    errors.push(err);
+                }
+            }
+            _ => match_errors!(out, errors, cursor.next().unwrap().clone().try_into()),
         }
     }
 
     if errors.is_empty() {
-        Ok(PostProc{ stream: out, org })
+        Ok(PostProc { stream: out, org })
     } else {
         Err(errors)
     }
 }
 
-fn eval_if(stream: &mut TokenStream, defines: &[Define]) {
+fn eval_if(cursor: &mut Cursor, defines: &[Define]) -> Result<TokenStream, Diagnostic> {
+    use TokenInner as TI;
 
+    cursor.next();
+    let start = cursor.position;
+    let end = cursor
+        .position(|tok| tok.inner == TokenInner::NewLine)
+        .ok_or_else(|| {
+            spanned_error!(
+                cursor.buffer[cursor.buffer.len() - 1].span.clone(),
+                "expected newline after `@if` expression, found `EOF`"
+            )
+        })?;
+
+    if start == end {
+        return Err(spanned_error!(
+            cursor.buffer[start].span.clone(),
+            "expected expression, found newline"
+        ));
+    }
+
+    let eval = eval::eval_no_paren(&cursor.buffer[start..end], defines)?;
+
+    let mut out = Vec::new();
+    let mut body = Vec::new();
+    let mut depth = 0;
+
+    for tok in cursor {
+        match tok.inner {
+            TI::Ident(lex::Ident::PreProc(PreProc::If)) | TI::Ident(lex::Ident::PreProc(PreProc::IfDef)) => depth += 1,
+            TI::Ident(lex::Ident::PreProc(PreProc::EndIf)) => {
+                if depth == 0 {
+                    if eval > 0 {}
+                    break;
+                } else {
+                    depth -= 1;
+                }
+            },
+            _ => body.push(tok),
+        }
+    }
+
+    Ok(out)
 }
 
 pub trait Parse: Sized {
@@ -198,7 +266,7 @@ impl FromStr for Define {
         };
 
         let lexed = lex::lex_string(&s[pos + 1..]);
-        let l = match lexed {
+        let mut l = match lexed {
             Ok(l) => l,
             Err(errors) => {
                 for err in errors {
@@ -210,7 +278,7 @@ impl FromStr for Define {
 
         Ok(Define {
             name: s[..pos].to_owned(),
-            value: Cursor::new(&l).parse()?,
+            value: Cursor::new(&mut l).parse()?,
         })
     }
 }
@@ -285,7 +353,6 @@ pub struct Label {
 
 pub struct Variable {
     span: Span,
-    
 }
 
 bitflags! {
