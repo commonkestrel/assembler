@@ -48,13 +48,17 @@
 use crate::{
     diagnostic::Diagnostic,
     error,
-    lex::{Delimeter, Ident, Punctuation, Span, Token, TokenInner},
+    lex::{Delimeter, Ident, Punctuation, Span, Token, TokenInner, TokenStream},
     parse::Define,
+    spanned_error,
 };
-use std::iter::Peekable;
+use std::{collections::HashMap, iter::Peekable};
 use std::{fmt, slice::Iter};
 
-pub fn eval_expr(tokens: &[Token], defines: &[Define]) -> Result<Token, Diagnostic> {
+pub fn eval_expr(
+    tokens: &[Token],
+    defines: &HashMap<String, TokenStream>,
+) -> Result<Token, Diagnostic> {
     let span = match (tokens.first(), tokens.last()) {
         (
             Some(Token {
@@ -86,7 +90,10 @@ pub fn eval_expr(tokens: &[Token], defines: &[Define]) -> Result<Token, Diagnost
     })
 }
 
-pub fn eval_no_paren(tokens: &[Token], defines: &[Define]) -> Result<i128, Diagnostic> {
+pub fn eval_no_paren(
+    tokens: &[Token],
+    defines: &HashMap<String, TokenStream>,
+) -> Result<i128, Diagnostic> {
     #[cfg(test)]
     println!("{}", Tree::parse(tokens, defines)?);
 
@@ -135,13 +142,16 @@ enum Tree {
 }
 
 impl Tree {
-    fn parse(tokens: &[Token], defines: &[Define]) -> Result<Tree, Diagnostic> {
+    fn parse(tokens: &[Token], defines: &HashMap<String, TokenStream>) -> Result<Tree, Diagnostic> {
         let mut iter = tokens.iter().peekable();
         Tree::parse_c(&mut iter, defines)
     }
 
     /// Parses a comparison
-    fn parse_c(tokens: &mut Peekable<Iter<Token>>, defines: &[Define]) -> Result<Tree, Diagnostic> {
+    fn parse_c(
+        tokens: &mut Peekable<Iter<Token>>,
+        defines: &HashMap<String, TokenStream>,
+    ) -> Result<Tree, Diagnostic> {
         use TokenInner as TI;
 
         let mut a = Tree::parse_b(tokens, defines)?;
@@ -166,7 +176,10 @@ impl Tree {
     }
 
     /// Parses a boolean operator
-    fn parse_b(tokens: &mut Peekable<Iter<Token>>, defines: &[Define]) -> Result<Tree, Diagnostic> {
+    fn parse_b(
+        tokens: &mut Peekable<Iter<Token>>,
+        defines: &HashMap<String, TokenStream>,
+    ) -> Result<Tree, Diagnostic> {
         use TokenInner as TI;
 
         let mut a = Tree::parse_e(tokens, defines)?;
@@ -211,7 +224,10 @@ impl Tree {
     }
 
     /// Parses an expression.
-    fn parse_e(tokens: &mut Peekable<Iter<Token>>, defines: &[Define]) -> Result<Tree, Diagnostic> {
+    fn parse_e(
+        tokens: &mut Peekable<Iter<Token>>,
+        defines: &HashMap<String, TokenStream>,
+    ) -> Result<Tree, Diagnostic> {
         use TokenInner as TI;
 
         let mut a = Tree::parse_t(tokens, defines)?;
@@ -261,7 +277,10 @@ impl Tree {
     }
 
     /// Parses a terminal.
-    fn parse_t(tokens: &mut Peekable<Iter<Token>>, defines: &[Define]) -> Result<Tree, Diagnostic> {
+    fn parse_t(
+        tokens: &mut Peekable<Iter<Token>>,
+        defines: &HashMap<String, TokenStream>,
+    ) -> Result<Tree, Diagnostic> {
         use TokenInner as TI;
 
         let mut a = Tree::parse_f(tokens, defines)?;
@@ -286,23 +305,25 @@ impl Tree {
     }
 
     /// Parses a factor.
-    fn parse_f(tokens: &mut Peekable<Iter<Token>>, defines: &[Define]) -> Result<Tree, Diagnostic> {
+    fn parse_f(
+        tokens: &mut Peekable<Iter<Token>>,
+        defines: &HashMap<String, TokenStream>,
+    ) -> Result<Tree, Diagnostic> {
         use TokenInner as TI;
         match tokens.next() {
             Some(tok) => match &tok.inner {
                 TI::Immediate(imm) => Ok(Tree::Literal(*imm)),
                 TI::Ident(id) => match id {
                     Ident::Ident(name) => {
-                        for def in defines {
-                            if def.name == name.as_ref() {
-                                return Tree::parse(&def.value, defines);
-                            }
-                        }
-                        Err(Diagnostic::spanned_error(
-                            tok.span.clone(),
-                            format!("Identifier `{name}` is not defined."),
-                        )
-                        .with_help("Constants must be defined before they are used."))
+                        return if let Some(tok) = defines.get(name) {
+                            Tree::parse(tok, defines)
+                        } else {
+                            Err(spanned_error!(
+                                tok.span.clone(),
+                                "Identifier `{name}` is not defined.",
+                            )
+                            .with_help("Constants must be defined before they are used."))
+                        };
                     }
                     _ => Err(Diagnostic::spanned_error(
                         tok.span.clone(),
@@ -427,7 +448,10 @@ mod tests {
         Err(Diagnostic::error("Not an expression"))
     }
 
-    fn test_expr(expr: &str, defines: &[Define]) -> Result<i128, Diagnostic> {
+    fn test_expr(
+        expr: &str,
+        defines: Option<HashMap<String, TokenStream>>,
+    ) -> Result<i128, Diagnostic> {
         let tokens = match crate::lex::lex_string(expr) {
             Ok(tok) => tok,
             Err(errors) => {
@@ -440,7 +464,7 @@ mod tests {
         };
 
         let expr = &tokens[trim_expr(&tokens)?];
-        let eval = eval_expr(expr, defines)?;
+        let eval = eval_expr(expr, &defines.unwrap_or_default())?;
 
         match eval {
             Token {
@@ -453,7 +477,7 @@ mod tests {
 
     #[test]
     fn addition() {
-        let eval = test_expr("(3+4+5)", &[]).expect_or_scream("Unable to evaluate `(3+4+5)`");
+        let eval = test_expr("(3+4+5)", None).expect_or_scream("Unable to evaluate `(3+4+5)`");
 
         assert_eq!(eval, 3 + 4 + 5);
     }
@@ -461,18 +485,18 @@ mod tests {
     #[test]
     fn pemdas() {
         let eval =
-            test_expr("(3 * (3 + 4) - 5)", &[]).expect_or_scream("Unable to evaluate `(3+4+5)`");
+            test_expr("(3 * (3 + 4) - 5)", None).expect_or_scream("Unable to evaluate `(3+4+5)`");
 
         assert_eq!(eval, 3 * (3 + 4) - 5);
     }
 
     #[test]
     fn define() {
-        let defines = [Define {
-            name: "TEST_DEFINE".to_owned(),
-            value: crate::lex::lex_string("(3+4)").expect_or_scream("Unable to lex `3+4`"),
-        }];
-        let eval = test_expr("(3 * 6 - TEST_DEFINE)", &defines)
+        let defines = [(
+            "TEST_DEFINE".to_owned(),
+            crate::lex::lex_string("(3+4)").expect_or_scream("Unable to lex `3+4`"),
+        )];
+        let eval = test_expr("(3 * 6 - TEST_DEFINE)", Some(defines.into()))
             .expect_or_scream("Unable to evaluate `(3*6 - TEST_DEFINE)`");
 
         assert_eq!(eval, 3 * 6 - (3 + 4));
@@ -480,7 +504,7 @@ mod tests {
 
     #[test]
     fn cmp_true() {
-        let eval = match test_expr("(3*16 <= 4*16 && 3+3 == 2+4)", &[]) {
+        let eval = match test_expr("(3*16 <= 4*16 && 3+3 == 2+4)", None) {
             Ok(e) => e,
             Err(err) => err.scream(),
         };
@@ -490,7 +514,7 @@ mod tests {
 
     #[test]
     fn cmp_false() {
-        let eval = match test_expr("(3*16 <= 4*16 && 3+3 != 2+4)", &[]) {
+        let eval = match test_expr("(3*16 <= 4*16 && 3+3 != 2+4)", None) {
             Ok(e) => e,
             Err(err) => err.scream(),
         };
@@ -501,12 +525,12 @@ mod tests {
     #[test]
     #[should_panic]
     fn no_paren() {
-        let eval = test_expr("3+4+5", &[]).expect_or_scream("Unable to evaluate `(3+4+5)`");
+        let eval = test_expr("3+4+5", None).expect_or_scream("Unable to evaluate `(3+4+5)`");
     }
 
     #[test]
     fn bitshift() {
-        let eval = match test_expr("((1<<3) | (1<<5))", &[]) {
+        let eval = match test_expr("((1<<3) | (1<<5))", None) {
             Ok(ok) => ok,
             Err(err) => err.scream(),
         };
