@@ -117,20 +117,24 @@ fn pre_proc(mut stream: TokenStream) -> Result<PostProc, Errors> {
     let mut cursor = Cursor::new(&mut stream);
 
     let mut out = Vec::new();
-    let mut defines: Vec<Define> = Vec::new();
+    let mut defines = HashMap::new();
     let mut errors = Vec::new();
     let mut org = None;
 
     while let Some(tok) = cursor.peek() {
         match tok.inner {
-            TI::Ident(lex::Ident::PreProc(PreProc::Define)) => {
-                match_errors!(defines, errors, cursor.parse());
-            }
-            TI::Ident(lex::Ident::PreProc(PreProc::If)) => {
-                if let Err(err) = eval_if(&mut cursor, &defines) {
-                    errors.push(err);
+            TI::Ident(lex::Ident::PreProc(PreProc::Define)) => match Define::parse(&mut cursor) {
+                Ok(def) => {
+                    defines.insert(def.name, def.value);
                 }
-            }
+                Err(err) => errors.push(err),
+            },
+            TI::Ident(lex::Ident::PreProc(PreProc::If)) => {
+                match eval_if(&mut cursor, &defines) {
+                    Ok(mut tokens) => todo!("need to process expanded tokens in place (`Vec::splice` maybe?)"),
+                    Err(err) => errors.push(err),
+                };
+            },
             _ => match_errors!(out, errors, cursor.next().unwrap().clone().try_into()),
         }
     }
@@ -142,10 +146,94 @@ fn pre_proc(mut stream: TokenStream) -> Result<PostProc, Errors> {
     }
 }
 
-fn eval_if(cursor: &mut Cursor, defines: &[Define]) -> Result<TokenStream, Diagnostic> {
+fn eval_if(
+    cursor: &mut Cursor,
+    defines: &HashMap<String, TokenStream>,
+) -> Result<TokenStream, Diagnostic> {
     use TokenInner as TI;
 
-    cursor.next();
+    let if_span = &cursor
+        .next()
+        .ok_or_else(|| {
+            error!("`parse::eval_if` called without tokens").with_help(
+                "This is a bug. Please report this at https://github.com/commonkestrel/assembler",
+            )
+        })?
+        .span;
+
+    let mut eval = if_expr(cursor, defines)?;
+
+    let mut out = Vec::new();
+    let mut depth = 0;
+
+    while let Some(tok) = cursor.peek() {
+        match tok.inner {
+            TI::Ident(lex::Ident::PreProc(PreProc::If))
+            | TI::Ident(lex::Ident::PreProc(PreProc::IfDef)) => {
+                cursor.step();
+                depth += 1;
+            },
+            TI::Ident(lex::Ident::PreProc(PreProc::EndIf)) => {
+                cursor.step();
+                if depth == 0 {
+                    break;
+                } else {
+                    depth -= 1;
+                }
+            },
+            TI::Ident(lex::Ident::PreProc(PreProc::ElIf)) => {
+                if depth == 0 {
+                    if eval {
+                        return cursor
+                            .position(|tok| {
+                                matches!(tok.inner, TI::Ident(lex::Ident::PreProc(PreProc::EndIf)))
+                            })
+                            .map(|_| out)
+                            .ok_or_else(|| {
+                                spanned_error!(
+                                    if_span.clone(),
+                                    "Unmatched `@if` statement, expected `@endif`, found `EOL`"
+                                )
+                            });
+                    } else {
+                        return eval_if(cursor, defines);
+                    }
+                }
+            },
+            TI::Ident(lex::Ident::PreProc(PreProc::Else)) => {
+                if depth == 0 {
+                    if eval {
+                        return cursor
+                            .position(|tok| {
+                                matches!(tok.inner, TI::Ident(lex::Ident::PreProc(PreProc::EndIf)))
+                            })
+                            .map(|_| out)
+                            .ok_or_else(|| {
+                                spanned_error!(
+                                    if_span.clone(),
+                                    "Unmatched `@if` statement, expected `@endif`, found `EOL`"
+                                )
+                            });
+                    } else {
+                        return eval_if(cursor, defines);
+                    }
+                }
+            },
+            _ => {
+                if eval {
+                    out.push(tok.clone());
+                }
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+fn if_expr(
+    cursor: &mut Cursor,
+    defines: &HashMap<String, TokenStream>,
+) -> Result<bool, Diagnostic> {
     let start = cursor.position;
     let end = cursor
         .position(|tok| tok.inner == TokenInner::NewLine)
@@ -165,26 +253,7 @@ fn eval_if(cursor: &mut Cursor, defines: &[Define]) -> Result<TokenStream, Diagn
 
     let eval = eval::eval_no_paren(&cursor.buffer[start..end], defines)?;
 
-    let mut out = Vec::new();
-    let mut body = Vec::new();
-    let mut depth = 0;
-
-    for tok in cursor {
-        match tok.inner {
-            TI::Ident(lex::Ident::PreProc(PreProc::If)) | TI::Ident(lex::Ident::PreProc(PreProc::IfDef)) => depth += 1,
-            TI::Ident(lex::Ident::PreProc(PreProc::EndIf)) => {
-                if depth == 0 {
-                    if eval > 0 {}
-                    break;
-                } else {
-                    depth -= 1;
-                }
-            },
-            _ => body.push(tok),
-        }
-    }
-
-    Ok(out)
+    Ok(eval > 0)
 }
 
 pub trait Parse: Sized {
