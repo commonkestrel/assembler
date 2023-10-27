@@ -20,12 +20,13 @@
 use bitflags::bitflags;
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::{mem, ops};
 
 use crate::ascii::AsciiStr;
 use crate::diagnostic::Diagnostic;
-use crate::eval;
-use crate::lex::{self, PreProc, Punctuation, Register, Span, Token, TokenInner, TokenStream, Ty};
-use crate::token::{Ident, If};
+use crate::eval::{self};
+use crate::lex::{self, PreProc, Punctuation, Register, Span, Token, TokenInner, TokenStream, Ty, Delimeter};
+use crate::token::{Ident, Immediate};
 use crate::Errors;
 use crate::{error, spanned_error, spanned_warn, warn, Token};
 
@@ -37,6 +38,7 @@ pub fn parse(stream: TokenStream) -> Result<ParseStream, Errors> {
 
 pub struct ParseStream {
     pub org: Option<u16>,
+    pub defines: HashMap<String, Define>,
     pub stream: Vec<ILToken>,
 }
 
@@ -54,12 +56,6 @@ macro_rules! match_errors {
     ($ok:ident, $errors:ident, $ex:expr) => {
         match $ex {
             Ok(ok) => $ok.push(ok),
-            Err(err) => $errors.push(err),
-        }
-    };
-    ($errors:ident, $ex:expr) => {
-        match $ex {
-            Ok(ok) => ok,
             Err(err) => $errors.push(err),
         }
     };
@@ -85,6 +81,7 @@ impl TryFrom<Token> for ProcToken {
         use TokenInner as TI;
         let inner = match token.inner {
             TI::Ident(lex::Ident::Instruction(inst)) => PTI::Instruction(inst),
+            TI::Location => PTI::Location,
             _ => return Err(
                 spanned_error!(
                     token.span,
@@ -108,7 +105,9 @@ enum ProcTokenInner {
     Char(u8),
     Punctuation(Punctuation),
     NewLine,
+    Delimeter(Delimeter),
     Instruction(lex::Instruction),
+    Location,
 }
 
 fn pre_proc(mut stream: TokenStream) -> Result<PostProc, Errors> {
@@ -131,10 +130,33 @@ fn pre_proc(mut stream: TokenStream) -> Result<PostProc, Errors> {
             },
             TI::Ident(lex::Ident::PreProc(PreProc::If)) => {
                 match eval_if(&mut cursor, &defines) {
-                    Ok(mut tokens) => todo!("need to process expanded tokens in place (`Vec::splice` maybe?)"),
+                    Ok(expanded) => {
+                        let position = cursor.position;
+                        mem::drop(cursor.buffer);
+                        stream.splice(expanded.1, expanded.0);
+                        cursor = Cursor {
+                            buffer: &stream,
+                            position,
+                        };
+                    }
                     Err(err) => errors.push(err),
                 };
-            },
+            }
+            TI::Ident(lex::Ident::PreProc(PreProc::Org)) => {
+                match Org::parse(&mut cursor) {
+                    Ok(origin) => {
+                        if org.is_some() {
+                            errors.push(
+                                spanned_error!(origin.span, "Duplicate definitions of origin")
+                                    .with_help("`@org` can only be used once per program"),
+                            );
+                        } else {
+                            org = Some(origin.address);
+                        }
+                    }
+                    Err(err) => errors.push(err),
+                }
+            }
             _ => match_errors!(out, errors, cursor.next().unwrap().clone().try_into()),
         }
     }
@@ -149,9 +171,10 @@ fn pre_proc(mut stream: TokenStream) -> Result<PostProc, Errors> {
 fn eval_if(
     cursor: &mut Cursor,
     defines: &HashMap<String, TokenStream>,
-) -> Result<TokenStream, Diagnostic> {
+) -> Result<(TokenStream, ops::Range<usize>), Diagnostic> {
     use TokenInner as TI;
 
+    let start = cursor.position;
     let if_span = &cursor
         .next()
         .ok_or_else(|| {
@@ -161,7 +184,7 @@ fn eval_if(
         })?
         .span;
 
-    let mut eval = if_expr(cursor, defines)?;
+    let eval = if_expr(cursor, defines)?;
 
     let mut out = Vec::new();
     let mut depth = 0;
@@ -172,7 +195,7 @@ fn eval_if(
             | TI::Ident(lex::Ident::PreProc(PreProc::IfDef)) => {
                 cursor.step();
                 depth += 1;
-            },
+            }
             TI::Ident(lex::Ident::PreProc(PreProc::EndIf)) => {
                 cursor.step();
                 if depth == 0 {
@@ -180,7 +203,7 @@ fn eval_if(
                 } else {
                     depth -= 1;
                 }
-            },
+            }
             TI::Ident(lex::Ident::PreProc(PreProc::ElIf)) => {
                 if depth == 0 {
                     if eval {
@@ -188,7 +211,7 @@ fn eval_if(
                             .position(|tok| {
                                 matches!(tok.inner, TI::Ident(lex::Ident::PreProc(PreProc::EndIf)))
                             })
-                            .map(|_| out)
+                            .map(|end| (out, (start..end + 1)))
                             .ok_or_else(|| {
                                 spanned_error!(
                                     if_span.clone(),
@@ -199,7 +222,7 @@ fn eval_if(
                         return eval_if(cursor, defines);
                     }
                 }
-            },
+            }
             TI::Ident(lex::Ident::PreProc(PreProc::Else)) => {
                 if depth == 0 {
                     if eval {
@@ -207,7 +230,7 @@ fn eval_if(
                             .position(|tok| {
                                 matches!(tok.inner, TI::Ident(lex::Ident::PreProc(PreProc::EndIf)))
                             })
-                            .map(|_| out)
+                            .map(|end| (out, start..end + 1))
                             .ok_or_else(|| {
                                 spanned_error!(
                                     if_span.clone(),
@@ -215,10 +238,17 @@ fn eval_if(
                                 )
                             });
                     } else {
-                        return eval_if(cursor, defines);
+                        while let Some(more) = cursor.next() {
+                            if matches!(more.inner, TI::Ident(lex::Ident::PreProc(PreProc::EndIf))) {
+                                
+                            } else {
+                                
+                            }
+                        };
+                        return Err(error!(""));
                     }
                 }
-            },
+            }
             _ => {
                 if eval {
                     out.push(tok.clone());
@@ -227,7 +257,7 @@ fn eval_if(
         }
     }
 
-    Ok(out)
+    Ok((out, start..cursor.position))
 }
 
 fn if_expr(
@@ -260,6 +290,7 @@ pub trait Parse: Sized {
     fn parse(cursor: &mut Cursor) -> Result<Self, Diagnostic>;
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Cursor<'a> {
     buffer: &'a [Token],
     position: usize,
@@ -302,6 +333,25 @@ impl<'a> Iterator for Cursor<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Org {
+    span: Span,
+    address: u16,
+}
+
+impl Parse for Org {
+    fn parse(cursor: &mut Cursor) -> Result<Self, Diagnostic> {
+        let org: Token![@ORG] = cursor.parse()?;
+        let addr: Immediate = cursor.parse()?;
+        let address = addr.value.try_into().map_err(|_| spanned_error!(addr.span.clone(), "origin address out of range").with_help("the program address space is 16-bit, so the origin must be 16-bit"))?;
+
+        Ok(Org {
+            span: org.span + addr.span,
+            address,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Define {
     pub name: String,
     pub value: TokenStream,
@@ -309,7 +359,7 @@ pub struct Define {
 
 impl Parse for Define {
     fn parse(cursor: &mut Cursor) -> Result<Self, Diagnostic> {
-        let _def: Token![@define] = cursor.parse()?;
+        let _def: Token![@DEFINE] = cursor.parse()?;
         let name: Ident = cursor.parse()?;
         let assignment: TokenStream = cursor.parse()?;
 

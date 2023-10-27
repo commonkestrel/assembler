@@ -32,15 +32,22 @@ macro_rules! Token {
     [>>] => {$crate::token::Shr};
     [,] => {$crate::token::Comma};
     [:] => {$crate::token::Colon};
-    [@macro] => {$crate::token::Macro};
-    [@define] => {$crate::token::Define};
-    [@ifdef] => {$crate::token::IfDef};
-    [@ifndef] => {$crate::token::IfNDef};
-    [@if] => {$crate::token::If};
-    [@elif] => {$crate::token::Elif};
-    [@else] => {$crate::token::Else};
-    [@endif] => {$crate::token::EndIf};
-    [@org] => {$crate::token::Org};
+    [@MACRO] => {$crate::token::Macro};
+    [@DEFINE] => {$crate::token::Define};
+    [@UNDEF] => {$crate::token::UnDef};
+    [@IFDEF] => {$crate::token::IfDef};
+    [@IFNDEF] => {$crate::token::IfNDef};
+    [@IF] => {$crate::token::If};
+    [@ELIF] => {$crate::token::Elif};
+    [@ELSE] => {$crate::token::Else};
+    [@ENDIF] => {$crate::token::EndIf};
+    [@ORG] => {$crate::token::Org};
+    [@CSEG] => {$crate::token::Cseg};
+    [@DSEG] => {$crate::token::Dseg};
+    [@BYTE] => {$crate::token::Byte};
+    [@DOUBLE] => {$crate::token::Double};
+    [@QUAD] => {$crate::token::Quad};
+    [@VAR] => {$crate::token::Var};
 }
 
 /// Creates a struct for a varient of [`TokenInner`][crate::lex::TokenInner] and implements [`Parse`] for it.
@@ -127,17 +134,23 @@ parsable! {
 /* Pre-proc arguments */
 
 parsable! {
-    "@[type]" ; match Ident(lex::Ident::PreProc(PreProc::Variable(ty))) => Variable {pub ty: lex::Ty},
-    "@include"; match Ident(lex::Ident::PreProc(PreProc::Include)) => Include,
-    "@macro"  ; match Ident(lex::Ident::PreProc(PreProc::Macro)) => Macro,
-    "@define" ; match Ident(lex::Ident::PreProc(PreProc::Define)) => Define,
-    "@ifdef"  ; match Ident(lex::Ident::PreProc(PreProc::IfDef)) => IfDef,
-    "@ifndef" ; match Ident(lex::Ident::PreProc(PreProc::IfNDef)) => IfNDef,
-    "@if"     ; match Ident(lex::Ident::PreProc(PreProc::If)) => If,
-    "@else"   ; match Ident(lex::Ident::PreProc(PreProc::Else)) => Else,
-    "@elif"   ; match Ident(lex::Ident::PreProc(PreProc::ElIf)) => ElIf,
-    "@endif"  ; match Ident(lex::Ident::PreProc(PreProc::EndIf)) => EndIf,
-    "@org"    ; match Ident(lex::Ident::PreProc(PreProc::Org)) => Org,
+    "@INCLUDE"; match Ident(lex::Ident::PreProc(PreProc::Include)) => Include,
+    "@MACRO"  ; match Ident(lex::Ident::PreProc(PreProc::Macro)) => Macro,
+    "@DEFINE" ; match Ident(lex::Ident::PreProc(PreProc::Define)) => Define,
+    "@UNDEF"  ; match Ident(lex::Ident::PreProc(PreProc::UnDef)) => UnDef,
+    "@IFDEF"  ; match Ident(lex::Ident::PreProc(PreProc::IfDef)) => IfDef,
+    "@IFNDEF" ; match Ident(lex::Ident::PreProc(PreProc::IfNDef)) => IfNDef,
+    "@IF"     ; match Ident(lex::Ident::PreProc(PreProc::If)) => If,
+    "@ELSE"   ; match Ident(lex::Ident::PreProc(PreProc::Else)) => Else,
+    "@ELIF"   ; match Ident(lex::Ident::PreProc(PreProc::ElIf)) => ElIf,
+    "@ENDIF"  ; match Ident(lex::Ident::PreProc(PreProc::EndIf)) => EndIf,
+    "@ORG"    ; match Ident(lex::Ident::PreProc(PreProc::Org)) => Org,
+    "@CSEG"   ; match Ident(lex::Ident::PreProc(PreProc::Cseg)) => Cseg,
+    "@DSEG"   ; match Ident(lex::Ident::PreProc(PreProc::Dseg)) => Dseg,
+    "@BYTE"   ; match Ident(lex::Ident::PreProc(PreProc::Byte)) => Byte,
+    "@DOUBLE" ; match Ident(lex::Ident::PreProc(PreProc::Double)) => Double,
+    "@QUAD"   ; match Ident(lex::Ident::PreProc(PreProc::Quad)) => Quad,
+    "@VAR"    ; match Ident(lex::Ident::PreProc(PreProc::Var)) => Var,
 }
 
 /* Identifiers */

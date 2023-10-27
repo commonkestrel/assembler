@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::ascii::{unescape_str, AsciiStr, UnescapeError};
 use crate::diagnostic::{Diagnostic, OptionalScream, ResultScream};
-use crate::Errors;
+use crate::{error, Errors};
 use logos::{Lexer, Logos};
 
 pub type TokenStream = Vec<Token>;
@@ -252,6 +252,9 @@ pub enum TokenInner {
 
     #[regex(r"///[^\n]*", TokenInner::doc)]
     Doc(String),
+
+    #[token("$")]
+    Location,
 
     #[token("\n")]
     NewLine,
@@ -505,10 +508,10 @@ impl FromStr for Register {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum PreProc {
-    Variable(Ty),
     Include,
     Macro,
     Define,
+    UnDef,
     IfDef,
     IfNDef,
     If,
@@ -516,6 +519,12 @@ pub enum PreProc {
     ElIf,
     EndIf,
     Org,
+    Cseg,
+    Dseg,
+    Byte,
+    Double,
+    Quad,
+    Var,
 }
 
 impl FromStr for PreProc {
@@ -528,24 +537,25 @@ impl FromStr for PreProc {
 
         use PreProc as PP;
 
-        if let Ok(ty) = Ty::from_str(argument) {
-            Ok(PreProc::Variable(ty))
-        } else {
-            match argument {
-                "include" | "INCLUDE" => Ok(PP::Include),
-                "macro" | "MACRO" => Ok(PP::Macro),
-                "define" | "DEFINE" => Ok(PP::Define),
-                "ifdef" | "IFDEF" => Ok(PP::IfDef),
-                "ifndef" | "IFNDEF" => Ok(PP::IfNDef),
-                "if" | "IF" => Ok(PP::If),
-                "else" | "ELSE" => Ok(PP::Else),
-                "elif" | "ELIF" => Ok(PP::ElIf),
-                "endif" | "ENDIF" => Ok(PP::EndIf),
-                "org" | "ORG" => Ok(PP::Org),
-                _ => Err(Diagnostic::error(format!(
-                    "Unrecognized preprocessor argument"
-                ))),
-            }
+        match argument {
+            "INCLUDE" => Ok(PP::Include),
+            "MACRO" => Ok(PP::Macro),
+            "DEFINE" => Ok(PP::Define),
+            "UNDEF" => Ok(PP::UnDef),
+            "IFDEF" => Ok(PP::IfDef),
+            "IFNDEF" => Ok(PP::IfNDef),
+            "IF" => Ok(PP::If),
+            "ELSE" => Ok(PP::Else),
+            "ELIF" => Ok(PP::ElIf),
+            "ENDIF" => Ok(PP::EndIf),
+            "ORG" => Ok(PP::Org),
+            "CSEG" => Ok(PP::Cseg),
+            "DSEG" => Ok(PP::Dseg),
+            "BYTE" => Ok(PP::Byte),
+            "DOUBLE" => Ok(PP::Double),
+            "QUAD" => Ok(PP::Quad),
+            "VAR" => Ok(PP::Var),
+            _ => Err(error!("Unrecognized preprocessor argument")),
         }
     }
 }
@@ -770,6 +780,15 @@ impl Span {
     }
 }
 
+impl std::ops::Add for Span {
+    type Output = Span;
+
+    fn add(mut self, rhs: Self) -> Self::Output {
+        self.range.end = rhs.range.end;
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -821,7 +840,7 @@ mod tests {
 
     #[test]
     fn delim() {
-        let example = "< )".to_owned();
+        let example = "$hi$".to_owned();
 
         let lexed = match lex_string(example) {
             Ok(tokens) => tokens,
