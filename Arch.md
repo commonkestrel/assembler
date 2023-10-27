@@ -4,20 +4,35 @@ This file details the (possible) architecture for this CPU.
 
 ## Instructions
 0x0: `ADD reg, imm8/reg`  => reg = reg + imm8/reg
+
 0x1: `SUB reg, imm8/reg`  => reg = reg - imm8/reg
+
 0x2: `ADC reg, imm8/reg`  => reg = reg + imm8/reg + C
+
 0x3: `SBC reg, imm8/reg`  => reg = reg - imm8/reg - C
+
 0x4: `NAND reg, imm8/reg` => reg = reg & imm8/reg
+
 0x5: `OR reg, imm8/reg`   => reg = reg | imm8/reg
+
 0x6: `CMP reg, imm8/reg`  => S = reg vs. imm8/reg (See [Status](#status))
+
 0x7: `MV reg, imm8/reg`   => reg = imm8/reg
+
 0x8: `LD reg, [HL/imm16]` => reg = [HL/imm16] 
+
 0x9: `ST reg, [HL/imm16]` => [HL/imm16] = reg
+
 0xA: `LDA imm16`          => HL = imm16
+
 0xB: `PUSH reg/imm8`      => [++SP] = reg/imm8
+
 0xC: `POP reg`            => reg = [SP--]
+
 0xD: `JNZ reg/imm8`       => imm8/reg != 0 ? PC = HL : NOP
+
 0xE: `IN reg, reg/imm8`   => reg = PORT[reg/imm8]
+
 0xF: `OUT reg/imm8, reg`  => PORT[reg/imm8] = reg 
 
 ## Layout
