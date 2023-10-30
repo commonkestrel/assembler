@@ -225,7 +225,7 @@ impl Diagnostic {
 
         self.force_emit();
 
-        panic!();
+        panic!()
     }
 }
 
