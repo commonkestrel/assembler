@@ -1,11 +1,11 @@
 use crate::ascii::AsciiStr;
 use crate::lex::{self, Delimeter, PreProc, Punctuation, Span, Token, TokenInner, TokenStream};
-use crate::parse::{Cursor, Parse};
+use crate::parse::{Cursor, Parse, Parsable};
 use crate::Diagnostic;
 
 /// A type-macro that expands to the name of the Rust type representation of a given token.
 ///
-/// Commonly used in struct fields, the type of a `let` statement, or generics for a [`parse`][Parse::parse] call.
+/// Commonly used in struct fields, the type of a `let` statement, or generics for a [`parse`][Parsable::parse] call.
 ///
 /// Same idea as [syn](https://docs.rs/syn/latest/syn/macro.Token.html).
 #[macro_export]
@@ -64,7 +64,7 @@ macro_rules! parsable {
                 $($($v $field: $ty),*)?
             }
 
-            impl $crate::parse::Parse for $name {
+            impl $crate::parse::Parsable for $name {
                 fn parse(cursor: &mut $crate::parse::Cursor) -> Result<Self, Diagnostic> {
                     match cursor.next() {
                         Some($crate::lex::Token { inner: $crate::lex::TokenInner::$token($inner), span }) => Ok($name{ span: span.clone(), $($($field: ::std::borrow::ToOwned::to_owned($field)),*)? }),
@@ -82,7 +82,7 @@ macro_rules! parsable {
                 $($($v $field: $ty),*)?
             }
 
-            impl $crate::parse::Parse for $name {
+            impl $crate::parse::Parsable for $name {
                 fn parse(cursor: &mut $crate::parse::Cursor) -> Result<Self, Diagnostic> {
                     match cursor.next() {
                         Some($crate::lex::Token { inner: $crate::lex::TokenInner::$token($inner), span }) => Ok($name{ span: span.clone(), $($($field: ::std::borrow::ToOwned::to_owned($field)),*)? }),
@@ -172,7 +172,7 @@ parsable! {
     doc string; match Doc(md) => Doc{pub md: String},
 }
 
-impl Parse for TokenStream {
+impl Parsable for TokenStream {
     fn parse(cursor: &mut Cursor) -> Result<Self, Diagnostic> {
         let mut stream = Vec::new();
         for tok in cursor {

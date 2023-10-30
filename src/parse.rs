@@ -1,55 +1,27 @@
 //! WIP token tree parsing
-//! Split into three passes:
-//! 1. Preprocessor expansion
-//! 2. Instruction parsing
-//! 3. Macro expansion
 //!
-//! ## Preprocessor Expansion
-//!
-//! Preproc expansion includes the obvious things, like @define, @paste, etc.,
-//! but also expressions (`(1 << 2) | (1 << 5)`).
-//!
-//! ## Instruction Parsing
-//!
-//! Parses tokens like `ldi A, 0x7F` into recognizable structures.
-//!
-//! ## Macro Expansion
-//!
-//! Recursivly expands macros, leaving the token tree with just instructions.
+//! # Parsing Steps
+//! 1. Expand if statements, defines, and parse macros
+//! 2. Expand Macros
+//! 3. Parse expressions and variables
 
 use bitflags::bitflags;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::{mem, ops};
+use std::{mem, ops, slice, iter};
 
 use crate::ascii::AsciiStr;
 use crate::diagnostic::Diagnostic;
-use crate::eval::{self};
-use crate::lex::{self, PreProc, Punctuation, Register, Span, Token, TokenInner, TokenStream, Ty, Delimeter};
-use crate::token::{Ident, Immediate};
+use crate::{eval, token};
+use crate::lex::{self, PreProc, Punctuation, Register, Span, Token, TokenInner, TokenStream, Ty};
 use crate::Errors;
+use crate::token::{Ident, Immediate};
 use crate::{error, spanned_error, spanned_warn, warn, Token};
 
-pub fn parse(stream: TokenStream) -> Result<ParseStream, Errors> {
+pub fn parse(stream: TokenStream) -> Result<(), Errors> {
     let proc_stream = pre_proc(stream)?;
 
     Err(vec![error!("Parsing not yet implemented")])
-}
-
-pub struct ParseStream {
-    pub org: Option<u16>,
-    pub defines: HashMap<String, Define>,
-    pub stream: Vec<ILToken>,
-}
-
-pub struct ILToken {
-    pub span: Span,
-    pub inner: ILInner,
-}
-
-pub enum ILInner {
-    Instruction(Instruction),
-    Label(String),
 }
 
 macro_rules! match_errors {
@@ -61,122 +33,132 @@ macro_rules! match_errors {
     };
 }
 
+enum Seg {
+    Cseg,
+    Dseg,
+}
+
 struct PostProc {
-    stream: ProcStream,
+    macros: Vec<Macro>,
+    variables: HashMap<String, u16>,
+    code: 
+}
+
+struct Processed {
+    code: Vec<Cseg>,
+    data: Vec<Dseg>,
+}
+
+struct Dseg {
+    dseg: token::Dseg,
+    org: Option<u16>,
+    variables: HashMap<String, u16>,
+}
+
+impl Dseg {
+    fn size(&self) -> Result<u16, Diagnostic> {
+        let mut size: u16 = 0;
+
+        for variable in self.variables.values() {
+            size = size.checked_add(*variable).ok_or_else(|| spanned_error!(self.dseg.span.clone(), "data segment out of range"))?;
+        }
+
+        Ok(size)
+    }
+}
+
+struct Cseg {
+    cseg: Option<token::Cseg>,
     org: Option<u16>,
 }
 
-type ProcStream = Vec<ProcToken>;
-
-struct ProcToken {
-    span: Span,
-    inner: ProcTokenInner,
+struct Context {
+    cseg_org: Option<u16>,
+    dseg_org: Option<u16>,
+    defines: HashMap<String, TokenStream>,
+    stream: TokenStream,
+    position: usize,
 }
 
-impl TryFrom<Token> for ProcToken {
-    type Error = Diagnostic;
-
-    fn try_from(token: Token) -> Result<Self, Self::Error> {
-        use ProcTokenInner as PTI;
-        use TokenInner as TI;
-        let inner = match token.inner {
-            TI::Ident(lex::Ident::Instruction(inst)) => PTI::Instruction(inst),
-            TI::Location => PTI::Location,
-            _ => return Err(
-                spanned_error!(
-                    token.span,
-                    "unexpected artifact in preproc token stream conversion"
-                )
-                .with_help("This is a bug. Please report it at https://github.com/commonkestrel/assembler/issues")
-            ),
-        };
-
-        Ok(ProcToken {
-            span: token.span,
-            inner,
-        })
+impl Context {
+    fn cursor(&self) -> Cursor {
+        self.stream.iter().skip(self.position).peekable()
     }
 }
 
-enum ProcTokenInner {
-    Literal(i128),
-    Address(u16),
-    String(AsciiStr),
-    Char(u8),
-    Punctuation(Punctuation),
-    NewLine,
-    Delimeter(Delimeter),
-    Instruction(lex::Instruction),
-    Location,
+pub trait Parse {
+    fn parse<R: Parsable>(&mut self) -> Result<R, Diagnostic>;
 }
 
-fn pre_proc(mut stream: TokenStream) -> Result<PostProc, Errors> {
-    use TokenInner as TI;
+pub type Cursor<'a> = iter::Peekable<iter::Skip<slice::Iter<'a, Token>>>;
 
-    let mut cursor = Cursor::new(&mut stream);
+impl<'a> Parse for Cursor<'a> {
+    fn parse<R: Parsable>(&mut self) -> Result<R, Diagnostic> {
+        R::parse(self)
+    }
+}
 
-    let mut out = Vec::new();
-    let mut defines = HashMap::new();
+fn pre_proc(mut stream: TokenStream) -> Result<(), Errors> {
+    let mut ctx = Context {
+        cseg_org: None,
+        dseg_org: None,
+        defines: HashMap::new(),
+        stream,
+        position: 0,
+    };
+
     let mut errors = Vec::new();
-    let mut org = None;
+
+    let mut cursor = ctx.cursor();
 
     while let Some(tok) = cursor.peek() {
-        match tok.inner {
-            TI::Ident(lex::Ident::PreProc(PreProc::Define)) => match Define::parse(&mut cursor) {
-                Ok(def) => {
-                    defines.insert(def.name, def.value);
-                }
-                Err(err) => errors.push(err),
-            },
-            TI::Ident(lex::Ident::PreProc(PreProc::If)) => {
-                match eval_if(&mut cursor, &defines) {
-                    Ok(expanded) => {
-                        let position = cursor.position;
-                        mem::drop(cursor.buffer);
-                        stream.splice(expanded.1, expanded.0);
-                        cursor = Cursor {
-                            buffer: &stream,
-                            position,
-                        };
-                    }
-                    Err(err) => errors.push(err),
-                };
-            }
-            TI::Ident(lex::Ident::PreProc(PreProc::Org)) => {
-                match Org::parse(&mut cursor) {
-                    Ok(origin) => {
-                        if org.is_some() {
-                            errors.push(
-                                spanned_error!(origin.span, "Duplicate definitions of origin")
-                                    .with_help("`@org` can only be used once per program"),
-                            );
-                        } else {
-                            org = Some(origin.address);
-                        }
-                    }
-                    Err(err) => errors.push(err),
-                }
-            }
-            _ => match_errors!(out, errors, cursor.next().unwrap().clone().try_into()),
-        }
+        expand_preproc(tok, &mut ctx);
+        cursor = ctx.cursor();
     }
 
-    if errors.is_empty() {
-        Ok(PostProc { stream: out, org })
-    } else {
-        Err(errors)
+    if !errors.is_empty() {
+        return Err(errors);
     }
+
+    Ok(())
 }
 
-fn eval_if(
-    cursor: &mut Cursor,
-    defines: &HashMap<String, TokenStream>,
-) -> Result<(TokenStream, ops::Range<usize>), Diagnostic> {
+fn expand_preproc(peek: &Token, ctx: &mut Context) -> Result<(), Diagnostic> {
+    let mut cursor = ctx.cursor();
+    
+    use TokenInner as TI;
+    match peek.inner {
+        TI::Ident(lex::Ident::PreProc(PreProc::Define)) => {
+            let def: Define = cursor.parse()?;
+            ctx.defines.insert(def.name, def.value);
+        },
+        TI::Ident(lex::Ident::PreProc(PreProc::If)) => {
+            let expanded = eval_if(ctx)?;
+            ctx.stream.splice(expanded.1, expanded.0);
+        }
+        TI::Ident(lex::Ident::PreProc(PreProc::Org)) => {
+            let origin = Org::parse(&mut cursor)?;
+            if ctx.cseg_org.is_some() {
+                return Err(spanned_error!(origin.span, "Duplicate definitions of origin")
+                        .with_help("`@org` can only be used once per program"));
+            } else {
+                ctx.cseg_org = Some(origin.address);
+            }
+        },
+        _ => match_errors!(out, errors, cursor.next().unwrap().clone().try_into()),
+    }
+
+    Ok(())
+}
+
+fn eval_if(ctx: &mut Context) -> Result<(TokenStream, ops::Range<usize>), Diagnostic> {
     use TokenInner as TI;
 
-    let start = cursor.position;
-    let if_span = &cursor
-        .next()
+    let mut cursor = ctx.cursor();
+
+    let start = ctx.position;
+    let if_span = cursor
+        .peek()
         .ok_or_else(|| {
             error!("`parse::eval_if` called without tokens").with_help(
                 "This is a bug. Please report this at https://github.com/commonkestrel/assembler",
@@ -184,7 +166,7 @@ fn eval_if(
         })?
         .span;
 
-    let eval = if_expr(cursor, defines)?;
+    let eval = if_expr(&mut cursor)?;
 
     let mut out = Vec::new();
     let mut depth = 0;
@@ -193,11 +175,11 @@ fn eval_if(
         match tok.inner {
             TI::Ident(lex::Ident::PreProc(PreProc::If))
             | TI::Ident(lex::Ident::PreProc(PreProc::IfDef)) => {
-                cursor.step();
+                _ = cursor.next();
                 depth += 1;
             }
             TI::Ident(lex::Ident::PreProc(PreProc::EndIf)) => {
-                cursor.step();
+                _ = cursor.next();
                 if depth == 0 {
                     break;
                 } else {
@@ -219,7 +201,7 @@ fn eval_if(
                                 )
                             });
                     } else {
-                        return eval_if(cursor, defines);
+                        return eval_if(ctx);
                     }
                 }
             }
@@ -286,50 +268,8 @@ fn if_expr(
     Ok(eval > 0)
 }
 
-pub trait Parse: Sized {
+pub trait Parsable: Sized {
     fn parse(cursor: &mut Cursor) -> Result<Self, Diagnostic>;
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Cursor<'a> {
-    buffer: &'a [Token],
-    position: usize,
-}
-
-impl<'a> Cursor<'a> {
-    pub fn new(buffer: &'a [Token]) -> Self {
-        Self {
-            buffer,
-            position: 0,
-        }
-    }
-
-    pub fn parse<R>(&mut self) -> Result<R, Diagnostic>
-    where
-        R: Parse,
-    {
-        R::parse(self)
-    }
-
-    pub fn peek(&self) -> Option<&'a Token> {
-        self.buffer.get(self.position)
-    }
-
-    pub fn step(&mut self) {
-        self.position += 1;
-    }
-}
-
-impl<'a> Iterator for Cursor<'a> {
-    type Item = &'a Token;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ret = self.buffer.get(self.position);
-
-        self.position += 1;
-
-        ret
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -338,16 +278,10 @@ pub struct Org {
     address: u16,
 }
 
-impl Parse for Org {
+impl Parsable for Org {
     fn parse(cursor: &mut Cursor) -> Result<Self, Diagnostic> {
         let org: Token![@ORG] = cursor.parse()?;
         let addr: Immediate = cursor.parse()?;
-        let address = addr.value.try_into().map_err(|_| spanned_error!(addr.span.clone(), "origin address out of range").with_help("the program address space is 16-bit, so the origin must be 16-bit"))?;
-
-        Ok(Org {
-            span: org.span + addr.span,
-            address,
-        })
     }
 }
 
@@ -357,7 +291,7 @@ pub struct Define {
     pub value: TokenStream,
 }
 
-impl Parse for Define {
+impl Parsable for Define {
     fn parse(cursor: &mut Cursor) -> Result<Self, Diagnostic> {
         let _def: Token![@DEFINE] = cursor.parse()?;
         let name: Ident = cursor.parse()?;
