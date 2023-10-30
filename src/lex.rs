@@ -489,19 +489,19 @@ pub enum Register {
 }
 
 impl FromStr for Register {
-    type Err = ();
+    type Err = Diagnostic;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_uppercase().as_str() {
-            "A" => Ok(Register::A),
-            "B" => Ok(Register::B),
-            "C" => Ok(Register::C),
-            "D" => Ok(Register::D),
-            "Z" => Ok(Register::Z),
-            "S" | "SREG" => Ok(Register::S),
-            "L" => Ok(Register::L),
-            "H" => Ok(Register::H),
-            _ => Err(()),
+            "r0" => Ok(Register::A),
+            "r1" => Ok(Register::B),
+            "r2" => Ok(Register::C),
+            "r3" => Ok(Register::D),
+            "r4" => Ok(Register::Z),
+            "r5" => Ok(Register::S),
+            "r6" => Ok(Register::L),
+            "r7" => Ok(Register::H),
+            _ => Err(error!("unknown register")),
         }
     }
 }
@@ -780,15 +780,6 @@ impl Span {
     }
 }
 
-impl std::ops::Add for Span {
-    type Output = Span;
-
-    fn add(mut self, rhs: Self) -> Self::Output {
-        self.range.end = rhs.range.end;
-        self
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -840,7 +831,7 @@ mod tests {
 
     #[test]
     fn delim() {
-        let example = "$hi$".to_owned();
+        let example = "< )".to_owned();
 
         let lexed = match lex_string(example) {
             Ok(tokens) => tokens,
