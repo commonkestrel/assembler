@@ -2,9 +2,8 @@ use std::{collections::HashMap, ops};
 
 use crate::{
     diagnostic::Diagnostic,
-    error,
     lex::Register,
-    parse::{Address, ILInner, Instruction, ParseStream, RegImm},
+    parse::{Address, Instruction, RegImm},
     spanned_error, Errors,
 };
 
@@ -149,21 +148,17 @@ pub fn assemble(stream: ParseStream) -> Result<Vec<u8>, Errors> {
         return Err(errors);
     }
 
-    let mut output = Vec::new();
+    // let mut output = Vec::new();
 
-    for il in stream.stream {
-        match il.inner {
-            ILInner::Label(_) => {}
-            ILInner::Instruction(instruct) => match OpCode::from_instruction(instruct, &labels) {
-                Ok(op) => output.extend_from_slice(&op),
-                Err(d) => errors.push(d),
-            },
-        }
-    }
-
-    if errors.is_empty() {
-        Ok(output)
-    } else {
-        Err(errors)
-    }
+    // for il in stream.stream {
+    //     match il.inner {
+    //         ILInner::Label(_) => {}
+    //         ILInner::Instruction(instruct) => match OpCode::from_instruction(instruct, &labels) {
+    //             Ok(op) => output.extend_from_slice(&op),
+    //             Err(d) => errors.push(d),
+    //         },
+    //     }
+    // }
+    
+    todo!()
 }
